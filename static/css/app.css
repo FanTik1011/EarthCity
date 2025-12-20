@@ -656,4 +656,19 @@ body{
 @media (max-width:520px){
   .factorybar{ top: 66px; left: 12px; right: 12px; width: auto; }
 }
+/* ===== Factories panel open/close ===== */
+.factorybar{
+  /* already styled earlier, keep it */
+  transform: translateX(-120%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.factorybar.open{
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+
 

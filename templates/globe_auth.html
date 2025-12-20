@@ -32,11 +32,15 @@
         </div>
       </div>
 
-      <div class="top-actions">
-        <div class="pill" id="zoom">Zoom —</div>
-        <button class="btn-ghost" id="btnLogout" style="display:none;">Logout</button>
-      </div>
-    </div>
+     <div class="top-actions">
+  <div class="pill" id="zoom">Zoom —</div>
+
+  <!-- NEW: opens left factories panel -->
+  <button class="btn-ghost" id="btnOpenFactories">🏭 Factories</button>
+
+  <button class="btn-ghost" id="btnLogout" style="display:none;">Logout</button>
+</div>
+
 
     <!-- BUILD BAR (create country) -->
     <div class="buildbar glass" id="buildbar">
@@ -124,6 +128,56 @@
         </div>
       </div>
     </div>
+      <!-- RIGHT: COUNTRY PANEL -->
+<aside class="country-panel" id="countryPanel" aria-hidden="true">
+  <div class="cp-head">
+    <div class="cp-title">
+      <div class="cp-color" id="cpColor"></div>
+      <div>
+        <div class="cp-name" id="cpName">Country</div>
+        <div class="cp-sub" id="cpSub">—</div>
+      </div>
+    </div>
+    <button class="btn-ghost cp-close" id="cpClose" type="button">✖</button>
+  </div>
+
+    <div class="cp-body">
+      <div class="cp-grid">
+        <div class="cp-card">
+          <div class="k">Area</div>
+          <div class="v" id="cpArea">—</div>
+        </div>
+        <div class="cp-card">
+          <div class="k">Factories</div>
+          <div class="v" id="cpFactories">—</div>
+        </div>
+        <div class="cp-card">
+          <div class="k">Owner</div>
+          <div class="v" id="cpOwner">—</div>
+        </div>
+        <div class="cp-card">
+          <div class="k">Selected</div>
+          <div class="v" id="cpId">—</div>
+        </div>
+      </div>
+
+      <div class="cp-divider"></div>
+
+      <div class="cp-section">
+        <div class="cp-h">Actions</div>
+
+        <div class="cp-row">
+          <button class="btn-ghost" id="cpFly" type="button">🌍 Fly to</button>
+          <button class="btn-ghost" id="cpOpenFactories" type="button">🏭 Factories</button>
+        </div>
+
+        <div class="cp-small" id="cpHint">
+          Click on a country to view details. If it’s yours — build factories inside it.
+        </div>
+      </div>
+    </div>
+  </aside>
+
 
     <div class="vignette"></div>
     <div class="grain"></div>
@@ -213,7 +267,7 @@
             <div class="v" id="draftCost">—</div>
           </div>
           <div class="stat">
-            <div class="k>Your coins</div>
+            <div class="k">Your coins</div>
             <div class="v" id="myCoinsModal">—</div>
           </div>
         </div>

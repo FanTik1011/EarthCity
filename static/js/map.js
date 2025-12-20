@@ -42,6 +42,12 @@
   const btnCancelFactoryMode = $("btnCancelFactoryMode");
   const btnTipFactory = $("btnTipFactory");
   const fbTip = $("fbTip");
+  
+  // Topbar factories button
+const btnOpenFactories = $("btnOpenFactories");
+
+
+
 
   // ---- Stars background ----
   if (starsEl) {
@@ -1071,5 +1077,159 @@
       fbTip.style.display = (fbTip.style.display === "none" || !fbTip.style.display) ? "block" : "none";
     });
   }
+  /* =========================================================
+   COUNTRY PANEL + FACTORIES PANEL (ADD-ON BLOCK)
+   Paste this at the VERY END of map.js
+   ========================================================= */
+
+// ---------- UI refs ----------
+  
+
+  const countryPanel = document.getElementById("countryPanel");
+  const cpClose = document.getElementById("cpClose");
+  const cpColor = document.getElementById("cpColor");
+  const cpName = document.getElementById("cpName");
+  const cpSub = document.getElementById("cpSub");
+  const cpArea = document.getElementById("cpArea");
+  const cpFactories = document.getElementById("cpFactories");
+  const cpOwner = document.getElementById("cpOwner");
+  const cpId = document.getElementById("cpId");
+  const cpFly = document.getElementById("cpFly");
+  const cpOpenFactories = document.getElementById("cpOpenFactories");
+
+  
+
+  // ---------- STATE ----------
+  let factoriesPanelOpen = false;
+  let currentCountryPanelId = null;
+
+  // ---------- FACTORIES PANEL ----------
+  function setFactoriesPanel(open) {
+    factoriesPanelOpen = !!open;
+    if (!factorybar) return;
+
+    if (factoriesPanelOpen) {
+      factorybar.classList.add("open");
+    } else {
+      factorybar.classList.remove("open");
+    }
+  }
+
+  function toggleFactoriesPanel() {
+    setFactoriesPanel(!factoriesPanelOpen);
+  }
+
+  if (btnOpenFactories) {
+    btnOpenFactories.addEventListener("click", toggleFactoriesPanel);
+  }
+
+  // ---------- COUNTRY PANEL ----------
+  function closeCountryPanel() {
+    if (!countryPanel) return;
+    countryPanel.classList.remove("open");
+    countryPanel.setAttribute("aria-hidden", "true");
+    currentCountryPanelId = null;
+  }
+
+  function openCountryPanelBasic(props) {
+    if (!countryPanel) return;
+
+    const id = Number(props?.id ?? -1);
+    currentCountryPanelId = id;
+
+    const name = props?.name || "Country";
+    const color = props?.color || "#7c3aed";
+    const owner = props?.owner || "—";
+    const area = Number(props?.area_km2 || 0);
+
+    if (cpColor) cpColor.style.background = color;
+    if (cpName) cpName.textContent = name;
+    if (cpSub) cpSub.textContent = "MMO Country";
+    if (cpOwner) cpOwner.textContent = owner;
+    if (cpArea) cpArea.textContent = area ? `${Math.round(area).toLocaleString("en-US")} км²` : "—";
+    if (cpFactories) cpFactories.textContent = "—";
+    if (cpId) cpId.textContent = String(id);
+
+    countryPanel.classList.add("open");
+    countryPanel.setAttribute("aria-hidden", "false");
+  }
+
+  async function loadCountryDetailsToPanel(countryId) {
+    try {
+      const r = await fetch(`/api/countries/${countryId}`, { credentials: "include" });
+      const j = await r.json();
+      if (!j.ok) return;
+
+      const d = j.data || {};
+      if (cpFactories) cpFactories.textContent = d.factories ?? "0";
+      if (cpOwner) cpOwner.textContent = d.owner_username || "—";
+      if (cpSub) {
+        cpSub.textContent = d.is_mine ? "Your country ✅" : "Foreign country";
+      }
+    } catch (e) {
+      console.warn("Failed to load country details", e);
+    }
+  }
+
+  // ---------- MAP CLICK → OPEN COUNTRY PANEL ----------
+  if (window.__earthMap) {
+    window.__earthMap.on("click", "countries-fill", async (e) => {
+      const f = e.features?.[0];
+      if (!f) return;
+
+      const id = Number(f.properties?.id || -1);
+      if (id < 0) return;
+
+      // highlight
+      window.__earthMap.setFilter(
+        "countries-selected",
+        ["==", ["get", "id"], id]
+      );
+
+      openCountryPanelBasic(f.properties);
+      await loadCountryDetailsToPanel(id);
+    });
+  }
+
+  // ---------- PANEL BUTTONS ----------
+  if (cpClose) cpClose.addEventListener("click", closeCountryPanel);
+
+  if (cpFly && window.__earthMap) {
+    cpFly.addEventListener("click", () => {
+      if (!currentCountryPanelId) return;
+
+      const feat = (window.countriesFC?.features || []).find(
+        f => Number(f.properties?.id) === Number(currentCountryPanelId)
+      );
+      if (!feat) return;
+
+      const ring = feat.geometry?.coordinates?.[0];
+      if (!ring || ring.length < 3) return;
+
+      let lng = 0, lat = 0;
+      const pts = ring.slice(0, -1);
+      for (const p of pts) {
+        lng += p[0];
+        lat += p[1];
+      }
+      lng /= pts.length;
+      lat /= pts.length;
+
+      window.__earthMap.flyTo({
+        center: [lng, lat],
+        zoom: Math.max(window.__earthMap.getZoom(), 2.8),
+        speed: 1.2
+      });
+    });
+  }
+
+  if (cpOpenFactories) {
+    cpOpenFactories.addEventListener("click", () => {
+      setFactoriesPanel(true);
+    });
+  }
+
+  // ---------- INIT ----------
+  setFactoriesPanel(false);
 
 })();
