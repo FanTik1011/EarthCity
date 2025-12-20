@@ -7,10 +7,15 @@
   --glass2: rgba(0,0,0,.18);
   --shadow: 0 22px 90px rgba(0,0,0,.65);
   --r: 18px;
+
+  /* mobile safe-area */
+  --topSafe: env(safe-area-inset-top, 0px);
+  --topbarH: 64px;
 }
 
 *{ box-sizing:border-box; }
 html,body{ height:100%; }
+
 body{
   margin:0;
   font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
@@ -28,49 +33,8 @@ body{
 
 /* Make MapLibre UI minimal */
 .maplibregl-ctrl-attrib, .maplibregl-ctrl-logo{ display:none !important; }
-.maplibregl-ctrl-top-right{ margin-top:78px; } /* so it doesn't clash with topbar */
 
-/* Topbar */
-.topbar{
-  position:absolute; left:0; right:0; top:0;
-  display:flex; align-items:center; justify-content:space-between;
-  padding:14px 16px;
-  z-index:10;
-  pointer-events:none; /* allow map interactions */
-}
-.topbar > *{ pointer-events:auto; }
-
-.brand{ display:flex; align-items:center; gap:12px; }
-.logo{
-  width:42px; height:42px; border-radius:14px;
-  display:grid; place-items:center;
-  font-weight:900;
-  background: linear-gradient(135deg, rgba(124,58,237,.95), rgba(34,197,94,.75));
-  box-shadow: 0 12px 30px rgba(124,58,237,.25);
-}
-.brand-text .title{ font-weight:900; letter-spacing:-.02em; }
-.brand-text .subtitle{ font-size:12px; color:var(--muted); margin-top:2px; }
-
-.top-actions{ display:flex; align-items:center; gap:10px; }
-.pill{
-  padding:8px 10px;
-  border-radius:999px;
-  border:1px solid var(--stroke);
-  background: rgba(0,0,0,.18);
-  font-weight:800;
-  font-size:12px;
-  color:rgba(255,255,255,.88);
-}
-
-/* HUD */
-.hud{
-  position:absolute;
-  left:16px; bottom:16px;
-  z-index:10;
-  pointer-events:none;
-}
-.hud .card{ pointer-events:auto; }
-
+/* ===== Shared UI ===== */
 .card{
   border:1px solid var(--stroke);
   border-radius: 18px;
@@ -84,6 +48,7 @@ body{
 }
 
 .row{ display:flex; gap:12px; align-items:flex-start; justify-content:space-between; }
+
 .block .k{ font-size:12px; color:var(--muted); }
 .block .v{ font-size:14px; font-weight:900; margin-top:2px; }
 .block.right{ text-align:right; }
@@ -113,7 +78,68 @@ body{
 }
 .btn-ghost:hover{ background: rgba(255,255,255,.08); }
 
-/* Stars */
+.btn-primary{
+  width:100%;
+  margin-top:10px;
+  padding:12px 12px;
+  border-radius: 14px;
+  border:1px solid var(--stroke);
+  background: rgba(255,255,255,.10);
+  color: rgba(255,255,255,.92);
+  font-weight:900;
+  cursor:pointer;
+}
+.btn-primary:hover{ background: rgba(255,255,255,.14); }
+
+/* ===== Topbar ===== */
+.topbar{
+  position:absolute; left:0; right:0;
+  top: var(--topSafe);
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px 16px;
+  z-index:120;
+  pointer-events:none; /* allow map interactions */
+}
+.topbar > *{ pointer-events:auto; }
+
+.brand{ display:flex; align-items:center; gap:12px; }
+.logo{
+  width:42px; height:42px; border-radius:14px;
+  display:grid; place-items:center;
+  font-weight:900;
+  background: linear-gradient(135deg, rgba(124,58,237,.95), rgba(34,197,94,.75));
+  box-shadow: 0 12px 30px rgba(124,58,237,.25);
+}
+.brand-text .title{ font-weight:900; letter-spacing:-.02em; }
+.brand-text .subtitle{ font-size:12px; color:var(--muted); margin-top:2px; }
+
+.top-actions{ display:flex; align-items:center; gap:10px; }
+.pill{
+  padding:8px 10px;
+  border-radius:999px;
+  border:1px solid var(--stroke);
+  background: rgba(0,0,0,.18);
+  font-weight:800;
+  font-size:12px;
+  color:rgba(255,255,255,.88);
+}
+
+/* map controls below topbar */
+.maplibregl-ctrl-top-right{
+  z-index:105;
+  margin-top: calc(var(--topSafe) + var(--topbarH) + 8px) !important;
+}
+
+/* ===== HUD ===== */
+.hud{
+  position:absolute;
+  left:16px; bottom:16px;
+  z-index:110;
+  pointer-events:none;
+}
+.hud .card{ pointer-events:auto; }
+
+/* ===== Stars ===== */
 .stars{
   position:absolute; inset:0;
   z-index:2;
@@ -133,7 +159,7 @@ body{
   50%{ opacity:1; transform:scale(1.15); }
 }
 
-/* Clouds (soft drifting blobs) */
+/* ===== Clouds ===== */
 .clouds{
   position:absolute; inset:-80px;
   z-index:3;
@@ -152,16 +178,16 @@ body{
   100%{ transform: translate3d(0,0,0); }
 }
 
-/* Vignette + grain */
+/* ===== Vignette + Grain ===== */
 .vignette{
   position:absolute; inset:0;
-  z-index:9;
+  z-index:40;
   pointer-events:none;
   background: radial-gradient(1200px 800px at 50% 40%, transparent 55%, rgba(0,0,0,.55));
 }
 .grain{
   position:absolute; inset:0;
-  z-index:11;
+  z-index:50;
   pointer-events:none;
   opacity:.09;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.35'/%3E%3C/svg%3E");
@@ -172,7 +198,7 @@ body{
 /* IMPORTANT: overlay must NOT block map interactions */
 .overlay{
   position:absolute; inset:0;
-  z-index:20;
+  z-index:200;
   display:flex;
   align-items:center;
   justify-content:center;
@@ -181,11 +207,9 @@ body{
   background: radial-gradient(900px 600px at 50% 40%, rgba(0,0,0,.20), rgba(0,0,0,.55));
   backdrop-filter: blur(10px);
 
-  pointer-events: none; /* ✅ globe still works */
+  pointer-events: none; /* globe still works */
 }
-.overlay .modal{
-  pointer-events: auto; /* ✅ modal buttons still clickable */
-}
+.overlay .modal{ pointer-events: auto; }
 
 .modal{
   width:min(520px, 100%);
@@ -223,19 +247,6 @@ body{
   outline:none;
 }
 
-.btn-primary{
-  width:100%;
-  margin-top:10px;
-  padding:12px 12px;
-  border-radius: 14px;
-  border:1px solid var(--stroke);
-  background: rgba(255,255,255,.10);
-  color: rgba(255,255,255,.92);
-  font-weight:900;
-  cursor:pointer;
-}
-.btn-primary:hover{ background: rgba(255,255,255,.14); }
-
 .msg{
   border:1px solid var(--stroke);
   background: rgba(0,0,0,.22);
@@ -265,11 +276,7 @@ body{
 .modal-foot{ margin-top:12px; padding:6px 4px 2px; }
 .foot-muted{ font-size:12px; color:rgba(255,255,255,.55); }
 
-@media (max-width: 520px){
-  .hud{ left:12px; right:12px; bottom:12px; }
-  .hud .card{ width: min(520px, 100%); }
-}
-/* ===== Resource markers (beauty upgrade) ===== */
+/* ===== Resource markers ===== */
 .resource-marker{
   display:flex;
   align-items:center;
@@ -277,8 +284,7 @@ body{
   padding:7px 12px;
   border-radius: 999px;
   border:1px solid rgba(255,255,255,.16);
-  background:
-    linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.05));
+  background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.05));
   backdrop-filter: blur(12px);
   box-shadow:
     0 18px 55px rgba(0,0,0,.55),
@@ -293,8 +299,7 @@ body{
 .resource-marker:hover{
   transform: translate(-50%, -50%) scale(1.05);
   border-color: rgba(255,255,255,.26);
-  background:
-    linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,.06));
+  background: linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,.06));
 }
 
 .resource-dot{
@@ -343,12 +348,13 @@ body{
 .resource-marker.tiny .resource-name,
 .resource-marker.tiny .resource-strength{ display:none; }
 .resource-marker.tiny{ padding:6px 9px; opacity:.68; }
-/* ===== Build bar (Create Country UI) ===== */
+
+/* ===== Build bar ===== */
 .buildbar{
   position:absolute;
-  top:72px;
+  top: calc(var(--topSafe) + var(--topbarH) + 8px);
   left:16px;
-  z-index:12;
+  z-index:110;
   display:flex;
   align-items:center;
   gap:10px;
@@ -364,6 +370,7 @@ body{
 .overlay.overlay-strong{
   background: radial-gradient(900px 600px at 50% 40%, rgba(0,0,0,.30), rgba(0,0,0,.70));
 }
+
 .country-stats{
   display:grid;
   grid-template-columns: repeat(3, 1fr);
@@ -387,16 +394,17 @@ body{
   font-size:13px;
   font-weight:900;
 }
-/* ===== Country Panel ===== */
+
+/* ===== Country Panel (right) ===== */
 .country-panel{
   position:absolute;
-  top: 70px;
+  top: calc(var(--topSafe) + var(--topbarH) + 6px);
   right: 14px;
   width: min(420px, calc(100vw - 28px));
-  max-height: calc(100vh - 90px);
+  max-height: calc(100vh - (var(--topSafe) + 90px));
   overflow: auto;
 
-  z-index: 70;                /* above map + fx */
+  z-index: 160;
   border: 1px solid rgba(255,255,255,.14);
   border-radius: 22px;
   background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(0,0,0,.20));
@@ -491,9 +499,7 @@ body{
   gap:10px;
   margin-top: 10px;
 }
-.cp-upgrades .btn-primary{
-  margin-top:0;
-}
+.cp-upgrades .btn-primary{ margin-top:0; }
 
 .cp-small{
   margin-top:10px;
@@ -505,28 +511,35 @@ body{
   color: rgba(255,255,255,.85);
 }
 
-@media (max-width:520px){
-  .country-panel{ top: 66px; right: 12px; }
-}
 /* ===== LEFT Factory Sidebar ===== */
 .factorybar{
   position:absolute;
-  top:72px;
+  top: calc(var(--topSafe) + var(--topbarH) + 6px);
   left:14px;
   width: min(420px, calc(100vw - 28px));
-  max-height: calc(100vh - 90px);
+  max-height: calc(100vh - (var(--topSafe) + 90px));
   overflow:auto;
 
-  z-index: 60;
+  z-index: 150;
   border: 1px solid rgba(255,255,255,.14);
   border-radius: 22px;
   box-shadow: 0 26px 90px rgba(0,0,0,.65);
 
+  background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(0,0,0,.20));
+  backdrop-filter: blur(14px);
+
+  /* closed by default */
+  transform: translateX(-120%);
+  opacity: 0;
+  pointer-events: none;
+
   transition: transform .22s ease, opacity .22s ease;
 }
 
-.factorybar.collapsed{
-  transform: translateX(calc(-100% + 54px));
+.factorybar.open{
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .fb-head{
@@ -652,23 +665,19 @@ body{
 }
 .fb-muted{ font-size:12px; color: rgba(255,255,255,.65); }
 
-/* Make sure sidebar doesn't clash on small screens */
-@media (max-width:520px){
-  .factorybar{ top: 66px; left: 12px; right: 12px; width: auto; }
+/* ===== Responsive ===== */
+@media (max-width: 520px){
+  .hud{ left:12px; right:12px; bottom:12px; }
+  .hud .card{ width: min(520px, 100%); }
+
+  .country-panel{
+    right: 12px;
+    top: calc(var(--topSafe) + var(--topbarH) + 2px);
+  }
+  .factorybar{
+    left: 12px;
+    right: 12px;
+    width:auto;
+    top: calc(var(--topSafe) + var(--topbarH) + 2px);
+  }
 }
-/* ===== Factories panel open/close ===== */
-.factorybar{
-  /* already styled earlier, keep it */
-  transform: translateX(-120%);
-  opacity: 0;
-  pointer-events: none;
-}
-
-.factorybar.open{
-  transform: translateX(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-
-

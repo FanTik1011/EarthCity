@@ -32,29 +32,26 @@
         </div>
       </div>
 
-     <div class="top-actions">
-  <div class="pill" id="zoom">Zoom —</div>
-
-  <!-- NEW: opens left factories panel -->
-  <button class="btn-ghost" id="btnOpenFactories">🏭 Factories</button>
-
-  <button class="btn-ghost" id="btnLogout" style="display:none;">Logout</button>
-</div>
-
+      <div class="top-actions">
+        <div class="pill" id="zoom">Zoom —</div>
+        <button class="btn-ghost" id="btnOpenFactories" type="button">🏭 Factories</button>
+        <button class="btn-ghost" id="btnLogout" type="button" style="display:none;">Logout</button>
+      </div>
+    </div>
 
     <!-- BUILD BAR (create country) -->
     <div class="buildbar glass" id="buildbar">
-      <button class="btn-ghost" id="btnCreateCountry">🏳️ Create Country</button>
+      <button class="btn-ghost" id="btnCreateCountry" type="button">🏳️ Create Country</button>
 
       <div class="build-actions" id="buildActions" style="display:none;">
-        <button class="btn-ghost" id="btnUndo">↩ Undo</button>
-        <button class="btn-ghost" id="btnCancel">✖ Cancel</button>
-        <button class="btn-primary" id="btnFinish">✅ Finish</button>
+        <button class="btn-ghost" id="btnUndo" type="button">↩ Undo</button>
+        <button class="btn-ghost" id="btnCancel" type="button">✖ Cancel</button>
+        <button class="btn-primary" id="btnFinish" type="button">✅ Finish</button>
       </div>
     </div>
 
     <!-- LEFT: FACTORY SIDEBAR -->
-    <aside class="factorybar glass" id="factorybar" aria-hidden="false">
+    <aside class="factorybar glass" id="factorybar" aria-hidden="true">
       <div class="fb-head">
         <div class="fb-title">
           <div class="fb-badge">🏭</div>
@@ -63,16 +60,17 @@
             <div class="fb-sub" id="fbSub">Build mode: off</div>
           </div>
         </div>
-        <button class="btn-ghost fb-close" id="fbToggle" type="button" title="Hide/Show">⟷</button>
+        <button class="btn-ghost fb-close" id="fbClose" type="button" title="Close">✖</button>
       </div>
 
       <div class="fb-body">
         <div class="fb-row">
+          <!-- coins pill for sidebar -->
           <div class="pill" id="myCoins">—</div>
           <button class="btn-ghost" id="btnFactoryMode" type="button">🧱 Build</button>
         </div>
 
-        <div class="fb-msg msg" id="fbMsg" style="display:none;"></div>
+        <div class="msg" id="fbMsg" style="display:none;"></div>
 
         <div class="fb-section">
           <div class="fb-h">Blueprints</div>
@@ -106,6 +104,59 @@
       </div>
     </aside>
 
+    <!-- RIGHT: COUNTRY PANEL -->
+    <aside class="country-panel" id="countryPanel" aria-hidden="true">
+      <div class="cp-head">
+        <div class="cp-title">
+          <div class="cp-color" id="cpColor"></div>
+          <div>
+            <div class="cp-name" id="cpName">—</div>
+            <div class="cp-sub" id="cpSub">Click a country to view details</div>
+          </div>
+        </div>
+        <button class="btn-ghost cp-close" id="cpClose" type="button">✖</button>
+      </div>
+
+      <div class="cp-body">
+        <div class="cp-grid">
+          <div class="cp-card">
+            <div class="k">Area</div>
+            <div class="v" id="cpArea">—</div>
+          </div>
+
+          <div class="cp-card">
+            <div class="k">Factories</div>
+            <div class="v" id="cpFactories">—</div>
+          </div>
+
+          <div class="cp-card">
+            <div class="k">Owner</div>
+            <div class="v" id="cpOwner">—</div>
+          </div>
+
+          <div class="cp-card">
+            <div class="k">Selected</div>
+            <div class="v" id="cpId">—</div>
+          </div>
+        </div>
+
+        <div class="cp-divider"></div>
+
+        <div class="cp-section">
+          <div class="cp-h">Actions</div>
+
+          <div class="cp-row">
+            <button class="btn-ghost" id="cpFly" type="button">🌍 Fly to</button>
+            <button class="btn-ghost" id="cpOpenFactories" type="button">🏭 Factories</button>
+          </div>
+
+          <div class="cp-small" id="cpHint">
+            Click on a country to view details. If it’s yours — build factories inside it.
+          </div>
+        </div>
+      </div>
+    </aside>
+
     <!-- HUD -->
     <div class="hud">
       <div class="card glass">
@@ -128,56 +179,6 @@
         </div>
       </div>
     </div>
-      <!-- RIGHT: COUNTRY PANEL -->
-<aside class="country-panel" id="countryPanel" aria-hidden="true">
-  <div class="cp-head">
-    <div class="cp-title">
-      <div class="cp-color" id="cpColor"></div>
-      <div>
-        <div class="cp-name" id="cpName">Country</div>
-        <div class="cp-sub" id="cpSub">—</div>
-      </div>
-    </div>
-    <button class="btn-ghost cp-close" id="cpClose" type="button">✖</button>
-  </div>
-
-    <div class="cp-body">
-      <div class="cp-grid">
-        <div class="cp-card">
-          <div class="k">Area</div>
-          <div class="v" id="cpArea">—</div>
-        </div>
-        <div class="cp-card">
-          <div class="k">Factories</div>
-          <div class="v" id="cpFactories">—</div>
-        </div>
-        <div class="cp-card">
-          <div class="k">Owner</div>
-          <div class="v" id="cpOwner">—</div>
-        </div>
-        <div class="cp-card">
-          <div class="k">Selected</div>
-          <div class="v" id="cpId">—</div>
-        </div>
-      </div>
-
-      <div class="cp-divider"></div>
-
-      <div class="cp-section">
-        <div class="cp-h">Actions</div>
-
-        <div class="cp-row">
-          <button class="btn-ghost" id="cpFly" type="button">🌍 Fly to</button>
-          <button class="btn-ghost" id="cpOpenFactories" type="button">🏭 Factories</button>
-        </div>
-
-        <div class="cp-small" id="cpHint">
-          Click on a country to view details. If it’s yours — build factories inside it.
-        </div>
-      </div>
-    </div>
-  </aside>
-
 
     <div class="vignette"></div>
     <div class="grain"></div>
@@ -278,7 +279,6 @@
         <button type="button" class="btn-ghost" id="btnCloseCountry">Закрити</button>
       </div>
     </div>
-
   </div>
 
   <script src="{{ url_for('static', filename='js/map.js') }}"></script>
