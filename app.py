@@ -9,7 +9,6 @@ import math
 import logging
 from datetime import datetime
 from urllib.parse import urljoin
-from functools import wraps
 
 from flask import Flask, render_template, request, url_for, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
@@ -23,20 +22,19 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from dotenv import load_dotenv
-
+from functools import wraps
+from sqlalchemy import text
 
 # ---------------------------
 # Load env
 # ---------------------------
-load_dotenv()  # reads .env locally
-
+load_dotenv()
 
 # ---------------------------
 # Logging
 # ---------------------------
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("earthcity")
-
 
 # ---------------------------
 # Economy constants
@@ -69,8 +67,6 @@ def _normalize_db_url(raw: str) -> str:
 # App config
 # ---------------------------
 app = Flask(__name__)
-
-# If behind proxy (Heroku), this fixes https + host
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev_change_me")
@@ -79,10 +75,8 @@ app.config["SECURITY_SALT"] = os.getenv("SECURITY_SALT", "dev_salt_change_me")
 app.config["SQLALCHEMY_DATABASE_URI"] = _normalize_db_url(os.getenv("DATABASE_URL", "sqlite:///app.db"))
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-# Generate external links with https (important for confirm links on Heroku)
 app.config["PREFERRED_URL_SCHEME"] = os.getenv("PREFERRED_URL_SCHEME", "https")
 
-# Cookies (good for https hosting)
 app.config["SESSION_COOKIE_SAMESITE"] = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
 app.config["SESSION_COOKIE_SECURE"] = os.getenv("SESSION_COOKIE_SECURE", "1") == "1"
 
@@ -98,9 +92,7 @@ app.config["MAIL_DEFAULT_SENDER"] = os.getenv(
     app.config["MAIL_USERNAME"] or "no-reply@example.com"
 )
 
-# Optional fixed base url (best on prod)
-app.config["PUBLIC_BASE_URL"] = (os.getenv("PUBLIC_BASE_URL") or "").strip()
-
+app.config["PUBLIC_BASE_URL"] = os.getenv("PUBLIC_BASE_URL", "").strip()
 
 # ---------------------------
 # Extensions
@@ -174,7 +166,7 @@ def compute_country_cost(area_km2: float) -> int:
 
 
 # ---------------------------
-# Resources & Blueprints (keep as-is)
+# Resources & Blueprints
 # ---------------------------
 RESOURCE_NODES = [
     {"type": "oil", "name": "Oil Basin", "lng": 50.5, "lat": 24.0, "strength": 0.95},
@@ -233,6 +225,7 @@ FACTORY_BLUEPRINTS = {
 # ---------------------------
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
+
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(255), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
@@ -241,15 +234,14 @@ class User(db.Model, UserMixin):
     confirmed_at = db.Column(db.DateTime, nullable=True)
 
     coins = db.Column(db.Integer, default=START_COINS, nullable=False)
+    starter_granted = db.Column(db.Boolean, default=True, nullable=False)
 
-    # ✅ lock: False by default (for older/test accounts you may grant once)
-    starter_granted = db.Column(db.Boolean, default=False, nullable=False)
-
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-
+    # ✅ Admin system (NEW, safe)
     is_admin = db.Column(db.Boolean, default=False, nullable=False)
     is_blocked = db.Column(db.Boolean, default=False, nullable=False)
     blocked_at = db.Column(db.DateTime, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
 
 class Country(db.Model):
@@ -297,7 +289,6 @@ class Factory(db.Model):
     lat = db.Column(db.Float, nullable=False)
 
     level = db.Column(db.Integer, nullable=False, default=1)
-
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     stored_coins = db.Column(db.Integer, default=0, nullable=False)
@@ -379,15 +370,32 @@ def send_confirmation_email(user: User) -> dict:
 
 
 # ---------------------------
-# Admin bootstrap
+# Admin helpers
 # ---------------------------
+def admin_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return jsonify(ok=False, error="Not authenticated"), 401
+        if getattr(current_user, "is_blocked", False):
+            return jsonify(ok=False, error="User is blocked"), 403
+        if not getattr(current_user, "is_admin", False):
+            return jsonify(ok=False, error="Admin only"), 403
+        return fn(*args, **kwargs)
+    return wrapper
+
+
 def ensure_admin_from_env():
+    """
+    Creates or upgrades an admin user based on env vars:
+    ADMIN_USERNAME, ADMIN_EMAIL, ADMIN_PASSWORD
+    """
     username = (os.getenv("ADMIN_USERNAME") or "").strip()
     email = (os.getenv("ADMIN_EMAIL") or "").strip().lower()
     password = os.getenv("ADMIN_PASSWORD") or ""
 
     if not username or not email or not password:
-        log.info("[ADMIN] ADMIN_USERNAME/ADMIN_EMAIL/ADMIN_PASSWORD not set — skipping admin bootstrap")
+        log.info("[ADMIN] ADMIN_* not set — skip bootstrap")
         return
 
     user = User.query.filter_by(email=email).first()
@@ -409,9 +417,6 @@ def ensure_admin_from_env():
         return
 
     changed = False
-    if user.username != username:
-        user.username = username
-        changed = True
     if not user.is_admin:
         user.is_admin = True
         changed = True
@@ -419,25 +424,33 @@ def ensure_admin_from_env():
         user.is_confirmed = True
         user.confirmed_at = datetime.utcnow()
         changed = True
+    if user.username != username:
+        user.username = username
+        changed = True
 
     if changed:
         db.session.commit()
         log.info("[ADMIN] Updated admin flags for: %s", email)
-    else:
-        log.info("[ADMIN] Admin already ok: %s", email)
 
 
-def admin_required(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if not current_user.is_authenticated:
-            return jsonify(ok=False, error="Not authenticated"), 401
-        if getattr(current_user, "is_blocked", False):
-            return jsonify(ok=False, error="User is blocked"), 403
-        if not getattr(current_user, "is_admin", False):
-            return jsonify(ok=False, error="Admin only"), 403
-        return fn(*args, **kwargs)
-    return wrapper
+def _safe_add_columns_for_admin():
+    """
+    If DB already exists without admin columns (common on Heroku),
+    add them safely (Postgres). SQLite ignores or works differently,
+    but create_all() handles new DB.
+    """
+    uri = (app.config.get("SQLALCHEMY_DATABASE_URI") or "")
+    if not uri.startswith("postgresql://"):
+        return
+
+    try:
+        # Add columns if missing (Postgres)
+        with db.engine.begin() as conn:
+            conn.execute(text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;'))
+            conn.execute(text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN NOT NULL DEFAULT FALSE;'))
+            conn.execute(text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMP;'))
+    except Exception as e:
+        log.warning("[DB MIGRATE] Could not alter user table: %s", e)
 
 
 # ---------------------------
@@ -446,6 +459,16 @@ def admin_required(fn):
 @app.get("/")
 def globe_page():
     return render_template("globe_auth.html")
+
+
+@app.get("/admin")
+@login_required
+def admin_page():
+    if getattr(current_user, "is_blocked", False):
+        return "Blocked", 403
+    if not getattr(current_user, "is_admin", False):
+        return "Admin only", 403
+    return render_template("admin.html")
 
 
 @app.get("/favicon.ico")
@@ -468,10 +491,23 @@ def api_me():
             email=None,
             is_confirmed=False,
             is_admin=False,
-            is_blocked=False,
             coins=0,
             has_country=False,
             starter_granted=False
+        )
+
+    if getattr(current_user, "is_blocked", False):
+        # still "authenticated", but blocked
+        return jsonify(
+            authenticated=True,
+            username=current_user.username,
+            email=current_user.email,
+            is_confirmed=bool(current_user.is_confirmed),
+            is_admin=bool(getattr(current_user, "is_admin", False)),
+            is_blocked=True,
+            coins=int(current_user.coins or 0),
+            has_country=False,
+            starter_granted=bool(getattr(current_user, "starter_granted", True))
         )
 
     has_country = Country.query.filter_by(owner_user_id=current_user.id).first() is not None
@@ -481,24 +517,19 @@ def api_me():
         email=current_user.email,
         is_confirmed=bool(current_user.is_confirmed),
         is_admin=bool(getattr(current_user, "is_admin", False)),
-        is_blocked=bool(getattr(current_user, "is_blocked", False)),
+        is_blocked=False,
         coins=int(current_user.coins or 0),
         has_country=bool(has_country),
-        starter_granted=bool(getattr(current_user, "starter_granted", False))
+        starter_granted=bool(getattr(current_user, "starter_granted", True))
     )
 
 
 @app.post("/api/me/grant_start_coins")
 @login_required
 def api_grant_start_coins():
-    # if blocked -> stop
-    if getattr(current_user, "is_blocked", False):
-        return jsonify(ok=False, error="User is blocked"), 403
-
-    if bool(getattr(current_user, "starter_granted", False)):
+    if bool(getattr(current_user, "starter_granted", True)):
         return jsonify(ok=True, already=True, coins=int(current_user.coins or 0))
 
-    # anti-abuse: if user already has coins >0, just lock
     if int(current_user.coins or 0) > 0:
         current_user.starter_granted = True
         db.session.commit()
@@ -513,7 +544,6 @@ def api_grant_start_coins():
 @app.post("/api/register")
 def api_register():
     data = request.get_json(force=True, silent=True) or {}
-
     username = (data.get("username") or "").strip()
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
@@ -537,7 +567,9 @@ def api_register():
         is_confirmed=False,
         confirmed_at=None,
         coins=START_COINS,
-        starter_granted=True  # ✅ at registration — lock as granted
+        starter_granted=True,
+        is_admin=False,
+        is_blocked=False
     )
     db.session.add(user)
     db.session.commit()
@@ -571,7 +603,7 @@ def api_login():
         username=user.username,
         coins=int(user.coins or 0),
         has_country=bool(has_country),
-        starter_granted=bool(getattr(user, "starter_granted", False))
+        starter_granted=bool(getattr(user, "starter_granted", True))
     )
 
 
@@ -586,8 +618,6 @@ def api_logout():
 def api_resend_confirmation():
     if not current_user.is_authenticated:
         return jsonify(ok=False, error="Not authenticated"), 401
-    if getattr(current_user, "is_blocked", False):
-        return jsonify(ok=False, error="User is blocked"), 403
     if current_user.is_confirmed:
         return jsonify(ok=True, already=True, sent=True, dev_link=None, mail_error=None)
 
@@ -613,11 +643,7 @@ def confirm_email(token: str):
         user.confirmed_at = datetime.utcnow()
         db.session.commit()
 
-    return render_template(
-        "confirm_result.html",
-        ok=True,
-        msg="Email підтверджено ✅ Повернись на вкладку з глобусом і зроби Login (або перезавантаж сторінку)."
-    )
+    return render_template("confirm_result.html", ok=True, msg="Email підтверджено ✅ Повернись на вкладку з глобусом і зроби Login (або перезавантаж сторінку).")
 
 
 # ---------------------------
@@ -1029,8 +1055,8 @@ def admin_users_list():
         "email": u.email,
         "coins": int(u.coins or 0),
         "is_confirmed": bool(u.is_confirmed),
-        "is_admin": bool(u.is_admin),
-        "is_blocked": bool(u.is_blocked),
+        "is_admin": bool(getattr(u, "is_admin", False)),
+        "is_blocked": bool(getattr(u, "is_blocked", False)),
         "created_at": u.created_at.isoformat() if u.created_at else None,
         "confirmed_at": u.confirmed_at.isoformat() if u.confirmed_at else None,
         "blocked_at": u.blocked_at.isoformat() if u.blocked_at else None,
@@ -1071,16 +1097,18 @@ def admin_make_admin(uid: int):
     u = db.session.get(User, uid)
     if not u:
         return jsonify(ok=False, error="User not found"), 404
+
     u.is_admin = True
     db.session.commit()
     return jsonify(ok=True)
 
 
 # ---------------------------
-# Init DB + bootstrap admin (works on Heroku gunicorn too)
+# Init DB once per dyno boot
 # ---------------------------
 with app.app_context():
     db.create_all()
+    _safe_add_columns_for_admin()
     ensure_admin_from_env()
 
 
