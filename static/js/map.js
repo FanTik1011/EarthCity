@@ -1223,13 +1223,23 @@ const btnOpenFactories = $("btnOpenFactories");
     });
   }
 
-  if (cpOpenFactories) {
-    cpOpenFactories.addEventListener("click", () => {
-      setFactoriesPanel(true);
+    if (cpOpenFactories) {
+      cpOpenFactories.addEventListener("click", () => {
+        setFactoriesPanel(true);
+      });
+    }
+
+    // ---------- INIT ----------
+    setFactoriesPanel(false);
+    const fbClose = document.getElementById("fbClose");
+
+  if (fbClose && factorybar) {
+    fbClose.addEventListener("click", () => {
+      // закрити панель factories
+      factorybar.classList.remove("open");
+      // якщо хочеш ще й вийти з режиму будівлі:
+      // setMode("explore");
     });
   }
-
-  // ---------- INIT ----------
-  setFactoriesPanel(false);
 
 })();
