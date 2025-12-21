@@ -34,6 +34,7 @@
 
       <div class="top-actions">
         <div class="pill" id="zoom">Zoom —</div>
+        <div class="pill" id="topCoins">💰 —</div>
         <button class="btn-ghost" id="btnOpenFactories" type="button">🏭 Factories</button>
         <button class="btn-ghost" id="btnLogout" type="button" style="display:none;">Logout</button>
       </div>
@@ -283,5 +284,35 @@
 
   <script src="{{ url_for('static', filename='js/map.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+  <script>
+  async function updateCoins() {
+    try {
+      const res = await fetch("/api/me", { credentials: "same-origin" });
+      const me = await res.json();
+
+      const coins = (me && me.authenticated) ? (me.coins || 0) : 0;
+      const pretty = coins.toLocaleString("uk-UA") + " EC";
+
+      const el = document.getElementById("myCoins");
+      const elModal = document.getElementById("myCoinsModal");
+      const userLabel = document.getElementById("userLabel");
+      const topCoins = document.getElementById("topCoins"); // ✅ NEW
+
+      if (el) el.textContent = "💰 " + pretty;
+      if (elModal) elModal.textContent = pretty;
+      if (topCoins) topCoins.textContent = "💰 " + pretty; // ✅ NEW
+
+      if (userLabel) {
+        userLabel.textContent = me.authenticated ? (me.username + " • " + pretty) : "Guest";
+      }
+    } catch (e) {}
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    updateCoins();
+    setInterval(updateCoins, 10000);
+  });
+</script>
+
 </body>
 </html>
