@@ -208,26 +208,6 @@ document.addEventListener("DOMContentLoaded", () => {
       showMsg(err.message);
     }
   });
-  const btnAdmin = document.getElementById("btnAdmin");
-
-async function refreshMeUI(){
-  const r = await fetch("/api/me", { credentials: "same-origin" });
-  const me = await r.json();
-
-  // existing your UI code...
-
-  // ✅ Admin button
-  if (btnAdmin) {
-    btnAdmin.style.display = (me.authenticated && me.is_admin) ? "" : "none";
-  }
-}
-
-if (btnAdmin) {
-  btnAdmin.addEventListener("click", () => {
-    window.location.href = "/admin";
-  });
-}
-
 
   refreshMe();
 });

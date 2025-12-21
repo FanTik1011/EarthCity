@@ -1278,5 +1278,5 @@
       // setMode("explore"); // optional
     });
   }
-  
+
 })();
