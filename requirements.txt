@@ -1,8 +1,9 @@
 Flask
+Flask-SQLAlchemy
 Flask-Login
 Flask-Mail
-Flask-SQLAlchemy
-gunicorn
 itsdangerous
 Werkzeug
+python-dotenv
+gunicorn
 psycopg2-binary
