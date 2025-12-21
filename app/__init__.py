@@ -10,7 +10,12 @@ from .services.admin_bootstrap import ensure_admin_from_env
 
 def create_app():
     # Local .env support (Heroku uses Config Vars)
-    load_dotenv()
+    from pathlib import Path
+
+    # Force-load .env from project root (works on Heroku if .env is committed)
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(env_path, override=False)
+
 
     app = Flask(__name__, template_folder="../templates", static_folder="../static")
     app.config.from_object(Config)

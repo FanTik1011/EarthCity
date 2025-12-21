@@ -118,7 +118,7 @@ def api_resend_confirmation():
     result = send_confirmation_email(current_app, mail, current_user, current_app.config["TOKEN_MAX_AGE_SECONDS"])
     return jsonify(ok=True, sent=result["sent"], dev_link=result["dev_link"], mail_error=result["error"])
 
-@auth_bp.get("/confirm/<token>")
+@auth_bp.get("/confirm/<token>", endpoint="confirm_email")
 def confirm_email(token: str):
     s = make_serializer(current_app.config["SECRET_KEY"], current_app.config["SECURITY_SALT"])
     try:
