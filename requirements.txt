@@ -1,9 +1,8 @@
-Flask
-Flask-SQLAlchemy
-Flask-Login
-Flask-Mail
-python-dotenv
-itsdangerous
-Werkzeug
-gunicorn
-psycopg2-binary
+Flask==3.0.3
+Flask-SQLAlchemy==3.1.1
+Flask-Login==0.6.3
+Flask-Mail==0.9.1
+python-dotenv==1.0.1
+itsdangerous==2.2.0
+gunicorn; sys_platform != "win32"
+psycopg2-binary==2.9.9
