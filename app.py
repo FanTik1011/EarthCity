@@ -634,17 +634,40 @@ def _resources_near_point_in_country(country: Country, lng: float, lat: float):
             near.append(n)
     return near
 
+def _resources_near_point_in_country(country: Country, lng: float, lat: float):
+    ring = _country_polygon_ring(country)
+    if not ring:
+        return []
+
+    near = []
+    for n in RESOURCE_NODES:
+        # must be inside country polygon
+        if not point_in_polygon(n["lng"], n["lat"], ring):
+            continue
+        # must be near building point
+        if haversine_km(lng, lat, n["lng"], n["lat"]) <= FACTORY_PICK_RADIUS_KM:
+            near.append(n)
+    return near
+
 def _calc_factory_rate_per_hour(factory: Factory) -> float:
+    """
+    Rate depends on blueprint base income and local resource strength.
+    Simple and cool:
+      effective_strength = avg strength of required resource types near factory (0..1)
+      multiplier = 0.75 + 0.65*effective_strength  (range ~0.75..1.40)
+      level multiplier = 1 + (level-1)*0.22
+    """
     bp = FACTORY_BLUEPRINTS.get(factory.blueprint)
     if not bp:
         return 0.0
+
     base = float(bp.get("base_income_per_hour", 0))
     level = int(factory.level or 1)
 
+    # recompute strength near factory
     country = db.session.get(Country, factory.country_id)
     if not country:
         return 0.0
-
     near = _resources_near_point_in_country(country, factory.lng, factory.lat)
     req = bp.get("requires", {})
 
@@ -662,27 +685,39 @@ def _calc_factory_rate_per_hour(factory: Factory) -> float:
     lvl_mult = 1.0 + (max(0, level - 1) * 0.22)
     return base * mult * lvl_mult
 
+
 def _accrue_factory(factory: Factory, now: datetime):
     last = factory.last_collected_at or now
     dt_hours = (now - last).total_seconds() / 3600.0
     if dt_hours <= 0:
         return
+
+    # cap offline
     dt_hours = min(dt_hours, FACTORY_ACCUM_CAP_HOURS)
+
     rate = _calc_factory_rate_per_hour(factory)
     gain = int(math.floor(rate * dt_hours))
     if gain > 0:
         factory.stored_coins = int(factory.stored_coins or 0) + gain
     factory.last_collected_at = now
 
+
 @app.get("/api/factories")
 def api_factories_list():
+    """
+    Returns all factories as GeoJSON for map markers (public).
+    """
     items = Factory.query.order_by(Factory.created_at.asc()).all()
     fc = {"type": "FeatureCollection", "features": [f.to_feature() for f in items]}
     return jsonify(ok=True, data=fc)
 
+
 @app.get("/api/my/factories")
 @login_required
 def api_my_factories():
+    """
+    Returns my factories with accrual preview.
+    """
     now = datetime.utcnow()
     items = Factory.query.filter_by(owner_user_id=current_user.id).all()
     out = []
@@ -703,6 +738,141 @@ def api_my_factories():
     db.session.commit()
     return jsonify(ok=True, data=out, coins=int(current_user.coins or 0))
 
+
+@app.post("/api/factories")
+@login_required
+def api_factory_build():
+    """
+    Build a factory at a map point.
+    Body: { country_id, blueprint, lng, lat }
+    """
+    if not current_user.is_confirmed:
+        return jsonify(ok=False, error="Email not confirmed"), 403
+
+    data = request.get_json(force=True, silent=True) or {}
+    cid = int(data.get("country_id") or 0)
+    blueprint = (data.get("blueprint") or "").strip()
+    lng = data.get("lng")
+    lat = data.get("lat")
+
+    if cid <= 0:
+        return jsonify(ok=False, error="country_id required"), 400
+    if blueprint not in FACTORY_BLUEPRINTS:
+        return jsonify(ok=False, error="Unknown blueprint"), 400
+    if not isinstance(lng, (int, float)) or not isinstance(lat, (int, float)):
+        return jsonify(ok=False, error="lng/lat required"), 400
+    if lng < -180 or lng > 180 or lat < -90 or lat > 90:
+        return jsonify(ok=False, error="lng/lat out of range"), 400
+
+    country = db.session.get(Country, cid)
+    if not country:
+        return jsonify(ok=False, error="Country not found"), 404
+    if country.owner_user_id != current_user.id:
+        return jsonify(ok=False, error="Not your country"), 403
+
+    # limit factories per country
+    cnt = Factory.query.filter_by(country_id=country.id).count()
+    if cnt >= FACTORY_MAX_PER_COUNTRY:
+        return jsonify(ok=False, error=f"Factory limit reached (max {FACTORY_MAX_PER_COUNTRY})"), 400
+
+    ring = _country_polygon_ring(country)
+    if not ring or not point_in_polygon(float(lng), float(lat), ring):
+        return jsonify(ok=False, error="Точку треба ставити ВСЕРЕДИНІ своєї країни."), 400
+
+    bp = FACTORY_BLUEPRINTS[blueprint]
+    total_cost = int(bp["build_cost"]) + int(FACTORY_PLACE_FEE)
+
+    if int(current_user.coins or 0) < total_cost:
+        return jsonify(ok=False, error=f"Недостатньо монет. Треба {total_cost} EC."), 400
+
+    # Resource requirements:
+    # You must have required resource nodes inside country and within radius of building point.
+    near = _resources_near_point_in_country(country, float(lng), float(lat))
+    req = bp.get("requires", {})
+    missing = []
+
+    for rtype, need_count in req.items():
+        found = 0
+        for n in near:
+            if n["type"] == rtype:
+                found += 1
+        if found < int(need_count):
+            missing.append(rtype)
+
+    if missing:
+        return jsonify(ok=False, error=f"Нема потрібних ресурсів поруч: {', '.join(missing)} (радіус {FACTORY_PICK_RADIUS_KM} км)."), 400
+
+    # charge
+    current_user.coins = int(current_user.coins or 0) - total_cost
+
+    f = Factory(
+        country_id=country.id,
+        owner_user_id=current_user.id,
+        blueprint=blueprint,
+        name=bp["name"],
+        icon=bp.get("icon", "🏭"),
+        lng=float(lng),
+        lat=float(lat),
+        level=1,
+        stored_coins=0,
+        last_collected_at=datetime.utcnow()
+    )
+    db.session.add(f)
+    db.session.commit()
+
+    return jsonify(ok=True, factory=f.to_feature(), coins=int(current_user.coins or 0))
+
+
+@app.post("/api/factories/<int:fid>/collect")
+@login_required
+def api_factory_collect(fid: int):
+    f = db.session.get(Factory, fid)
+    if not f:
+        return jsonify(ok=False, error="Factory not found"), 404
+    if f.owner_user_id != current_user.id:
+        return jsonify(ok=False, error="Not yours"), 403
+
+    now = datetime.utcnow()
+    _accrue_factory(f, now)
+
+    amount = int(f.stored_coins or 0)
+    if amount <= 0:
+        db.session.commit()
+        return jsonify(ok=True, collected=0, coins=int(current_user.coins or 0))
+
+    f.stored_coins = 0
+    current_user.coins = int(current_user.coins or 0) + amount
+    db.session.commit()
+
+    return jsonify(ok=True, collected=amount, coins=int(current_user.coins or 0))
+
+
+@app.post("/api/factories/<int:fid>/upgrade")
+@login_required
+def api_factory_upgrade(fid: int):
+    f = db.session.get(Factory, fid)
+    if not f:
+        return jsonify(ok=False, error="Factory not found"), 404
+    if f.owner_user_id != current_user.id:
+        return jsonify(ok=False, error="Not yours"), 403
+
+    # accrue first so you don't lose time
+    now = datetime.utcnow()
+    _accrue_factory(f, now)
+
+    # Upgrade cost scales
+    # Lv2 = 350, Lv3=520, Lv4=760...
+    next_lvl = int(f.level or 1) + 1
+    cost = int(260 * (next_lvl ** 1.55))
+
+    if int(current_user.coins or 0) < cost:
+        return jsonify(ok=False, error=f"Not enough coins. Need {cost} EC."), 400
+
+    current_user.coins = int(current_user.coins or 0) - cost
+    f.level = next_lvl
+    db.session.commit()
+
+    return jsonify(ok=True, level=int(f.level), coins=int(current_user.coins or 0))
 
 # ---------------------------
 # Init DB once per dyno boot
