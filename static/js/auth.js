@@ -19,6 +19,37 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const userLabel = $("userLabel");
 
+  // ---- NEW: polling when unconfirmed ----
+  let confirmPollTimer = null;
+
+  function startConfirmPolling() {
+    stopConfirmPolling();
+    confirmPollTimer = setInterval(async () => {
+      const me = await getMe().catch(() => null);
+      if (!me) return;
+
+      // if logged out - stop
+      if (!me.authenticated) {
+        stopConfirmPolling();
+        return;
+      }
+
+      // once confirmed -> refresh UI and stop
+      if (me.is_confirmed) {
+        stopConfirmPolling();
+        await refreshMe();
+      }
+    }, 2000);
+  }
+
+  function stopConfirmPolling() {
+    if (confirmPollTimer) {
+      clearInterval(confirmPollTimer);
+      confirmPollTimer = null;
+    }
+  }
+  // --------------------------------------
+
   function showMsg(text) {
     msg.style.display = "block";
     msg.textContent = text;
@@ -47,14 +78,20 @@ document.addEventListener("DOMContentLoaded", () => {
     panelLogin.style.display = which === "login" ? "block" : "none";
     panelRegister.style.display = which === "register" ? "block" : "none";
     panelUnconfirmed.style.display = "none";
+
+    stopConfirmPolling();
   }
 
   function showUnconfirmed() {
     clearMsg();
     showDevLink(null);
+
     panelLogin.style.display = "none";
     panelRegister.style.display = "none";
     panelUnconfirmed.style.display = "block";
+
+    // NEW: while user is unconfirmed, keep checking confirmation status
+    startConfirmPolling();
   }
 
   async function postJSON(path, body) {
@@ -83,6 +120,7 @@ document.addEventListener("DOMContentLoaded", () => {
       btnLogout.style.display = "inline-flex";
 
       if (me.is_confirmed) {
+        stopConfirmPolling(); // NEW
         overlay.style.display = "none";
         setTimeout(() => window.__earthMap && window.__earthMap.resize(), 60);
       } else {
@@ -90,12 +128,18 @@ document.addEventListener("DOMContentLoaded", () => {
         showUnconfirmed();
       }
     } else {
+      stopConfirmPolling(); // NEW
       userLabel.textContent = "Guest";
       btnLogout.style.display = "none";
       overlay.style.display = "flex";
       switchTab("login");
     }
   }
+
+  // Extra: if user returns to tab, refresh state (very useful after clicking confirm link)
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshMe();
+  });
 
   tabLogin.addEventListener("click", (e) => { e.preventDefault(); switchTab("login"); });
   tabRegister.addEventListener("click", (e) => { e.preventDefault(); switchTab("register"); });
@@ -111,7 +155,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = await postJSON("/api/login", { email, password });
       if (!data.is_confirmed) {
         showUnconfirmed();
-        showMsg("Підтверди email, щоб отримати доступ.");
+        showMsg("Підтверди email, щоб отримати доступ. Після підтвердження повернись на вкладку — ми перевіримо автоматично ✅");
       }
       await refreshMe();
     } catch (err) {
@@ -130,7 +174,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const data = await postJSON("/api/register", { username, email, password });
       showUnconfirmed();
-      showMsg("Ми надіслали лист ✅ Перевір Inbox/Spam.");
+      showMsg("Ми надіслали лист ✅ Перевір Inbox/Spam. Після кліку по лінку просто повернись на вкладку — підтягнеться автоматично.");
       if (data.sent === false && data.dev_link) showDevLink(data.dev_link);
       await refreshMe();
     } catch (err) {

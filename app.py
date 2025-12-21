@@ -1,6 +1,7 @@
 # app.py
-# EarthCity — Globe + Auth + MMO Countries + Resources + Factories (real buildings)
-# Run: python app.py
+# EarthCity — Globe + Auth + MMO Countries + Resources + Factories
+# Run local: python app.py
+# Heroku: gunicorn app:app
 
 import os
 import json
@@ -17,6 +18,7 @@ from flask_login import (
 from flask_mail import Mail, Message
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 # ---------------------------
@@ -24,32 +26,51 @@ from werkzeug.security import generate_password_hash, check_password_hash
 # ---------------------------
 START_COINS = 5000
 
-# Country creation economy
 COUNTRY_BASE_COST = 800
 COUNTRY_COST_PER_1000_KM2 = 35
 COUNTRY_MAX_AREA_KM2 = 250_000
 COUNTRY_MAX_POINTS = 60
 COUNTRY_MIN_POINTS = 3
 
-# Factories economy
-FACTORY_PLACE_FEE = 120             # small fee for placing building (anti-spam)
+FACTORY_PLACE_FEE = 120
 FACTORY_MAX_PER_COUNTRY = 40
-FACTORY_ACCUM_CAP_HOURS = 72        # cap offline accrual to 72h
-FACTORY_PICK_RADIUS_KM = 120        # to "use" resource, building must be near resource node
+FACTORY_ACCUM_CAP_HOURS = 72
+FACTORY_PICK_RADIUS_KM = 120
+
+TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24  # 24h
 
 
 # ---------------------------
-# Config
+# App + Config
 # ---------------------------
 app = Flask(__name__)
+
+# Heroku sits behind proxy -> correct scheme/host for url_for/external links
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev_change_me")
 app.config["SECURITY_SALT"] = os.getenv("SECURITY_SALT", "dev_salt_change_me")
 
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///app.db")
+# Heroku Postgres provides DATABASE_URL=postgres://... (SQLAlchemy expects postgresql://)
+db_url = os.getenv("DATABASE_URL", "sqlite:///app.db")
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-# Gmail SMTP
+# Better cookie behavior in production
+is_prod = os.getenv("FLASK_ENV") == "production" or os.getenv("HEROKU_APP_NAME") is not None
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+if is_prod:
+    # on https deployments
+    app.config["SESSION_COOKIE_SECURE"] = True
+    app.config["PREFERRED_URL_SCHEME"] = "https"
+else:
+    app.config["PREFERRED_URL_SCHEME"] = "http"
+
+# Gmail SMTP (use App Password)
 app.config["MAIL_SERVER"] = os.getenv("MAIL_SERVER", "smtp.gmail.com")
 app.config["MAIL_PORT"] = int(os.getenv("MAIL_PORT", "587"))
 app.config["MAIL_USE_TLS"] = True
@@ -60,8 +81,6 @@ app.config["MAIL_DEFAULT_SENDER"] = os.getenv(
     "MAIL_DEFAULT_SENDER",
     app.config["MAIL_USERNAME"] or "no-reply@example.com"
 )
-
-TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24  # 24h
 
 
 # ---------------------------
@@ -89,10 +108,6 @@ def haversine_km(lng1, lat1, lng2, lat2) -> float:
     return R * c
 
 def point_in_polygon(lng: float, lat: float, ring) -> bool:
-    """
-    Ray casting algorithm.
-    ring = [[lng, lat], ...] closed (first == last)
-    """
     if not ring or len(ring) < 4:
         return False
 
@@ -108,12 +123,7 @@ def point_in_polygon(lng: float, lat: float, ring) -> bool:
         j = i
     return inside
 
-
 def polygon_area_km2_equirect(geom: dict) -> float:
-    """
-    Fast MVP area: equirectangular around mean latitude.
-    Good for game economy.
-    """
     R = 6371.0088
     ring = geom["coordinates"][0]
     pts = ring[:-1]
@@ -137,7 +147,6 @@ def polygon_area_km2_equirect(geom: dict) -> float:
 
     return abs(s) / 2.0
 
-
 def compute_country_cost(area_km2: float) -> int:
     return int(round(COUNTRY_BASE_COST + (area_km2 / 1000.0) * COUNTRY_COST_PER_1000_KM2))
 
@@ -145,10 +154,7 @@ def compute_country_cost(area_km2: float) -> int:
 # ---------------------------
 # Resources & Blueprints
 # ---------------------------
-# Server is the source of truth. Front uses /api/resources.
-# strength: 0..1
 RESOURCE_NODES = [
-    # --- Oil/Gas ---
     {"type":"oil", "name":"Oil Basin", "lng":50.5, "lat":24.0, "strength":0.95},
     {"type":"oil", "name":"Oil Field", "lng":44.0, "lat":30.0, "strength":0.78},
     {"type":"oil", "name":"Oil Sands", "lng":-113.5, "lat":56.0, "strength":0.66},
@@ -158,7 +164,6 @@ RESOURCE_NODES = [
     {"type":"gas", "name":"Gas Field", "lng":65.0, "lat":39.0, "strength":0.77},
     {"type":"gas", "name":"Gas Field", "lng":133.0, "lat":-23.0, "strength":0.73},
 
-    # --- Metals ---
     {"type":"iron", "name":"Iron Ore", "lng":32.2, "lat":47.8, "strength":0.88},
     {"type":"iron", "name":"Iron Deposit", "lng":107.0, "lat":52.0, "strength":0.67},
     {"type":"iron", "name":"Iron Ore", "lng":-74.0, "lat":5.0, "strength":0.70},
@@ -171,7 +176,6 @@ RESOURCE_NODES = [
     {"type":"coal", "name":"Coal", "lng":88.0, "lat":23.0, "strength":0.70},
     {"type":"coal", "name":"Coal", "lng":147.0, "lat":-33.0, "strength":0.66},
 
-    # --- Food/Water ---
     {"type":"water", "name":"Fresh Water", "lng":90.0, "lat":23.8, "strength":0.90},
     {"type":"water", "name":"Fresh Water", "lng":30.5, "lat":-1.3, "strength":0.76},
     {"type":"water", "name":"Fresh Water", "lng":137.0, "lat":36.0, "strength":0.74},
@@ -181,7 +185,6 @@ RESOURCE_NODES = [
     {"type":"fish", "name":"Fishing Zone", "lng":142.0, "lat":41.5, "strength":0.72},
     {"type":"fish", "name":"Fishing Zone", "lng":16.0, "lat":55.5, "strength":0.68},
 
-    # --- Energy ---
     {"type":"wind", "name":"Wind Zone", "lng":8.0, "lat":56.0, "strength":0.75},
     {"type":"wind", "name":"Wind Zone", "lng":145.0, "lat":-35.0, "strength":0.73},
     {"type":"solar", "name":"Solar", "lng":25.0, "lat":23.0, "strength":0.86},
@@ -189,7 +192,6 @@ RESOURCE_NODES = [
     {"type":"hydro", "name":"Hydro Potential", "lng":85.0, "lat":28.0, "strength":0.78},
     {"type":"geo", "name":"Geothermal", "lng":-21.9, "lat":64.9, "strength":0.64},
 
-    # --- Extra (щоб було більше точок і цікавіше) ---
     {"type":"iron", "name":"Iron Deposit", "lng":27.0, "lat":62.0, "strength":0.75},
     {"type":"oil", "name":"Oil Field", "lng":115.0, "lat":4.5, "strength":0.69},
     {"type":"gas", "name":"Gas Field", "lng":-2.0, "lat":54.5, "strength":0.68},
@@ -200,91 +202,18 @@ RESOURCE_NODES = [
     {"type":"solar", "name":"Solar", "lng":55.0, "lat":-23.0, "strength":0.74},
 ]
 
-# Blueprints: what you can build.
-# Each requires certain resource types to be within radius and inside your country.
 FACTORY_BLUEPRINTS = {
-    "steel_mill": {
-        "name": "Steel Mill",
-        "icon": "🏗️",
-        "desc": "Переробляє Iron+Coal в стабільний прибуток. Дуже корисно для розвитку.",
-        "build_cost": 900,
-        "upkeep": 0,
-        "base_income_per_hour": 70,
-        "requires": {"iron": 1, "coal": 1}
-    },
-    "oil_refinery": {
-        "name": "Oil Refinery",
-        "icon": "🛢️",
-        "desc": "Нафта → гроші. Потребує Oil поряд.",
-        "build_cost": 1100,
-        "upkeep": 0,
-        "base_income_per_hour": 95,
-        "requires": {"oil": 1}
-    },
-    "gas_plant": {
-        "name": "Gas Plant",
-        "icon": "🔥",
-        "desc": "Газова енергетика. Стабільний дохід, хороший старт.",
-        "build_cost": 980,
-        "upkeep": 0,
-        "base_income_per_hour": 82,
-        "requires": {"gas": 1}
-    },
-    "hydro_plant": {
-        "name": "Hydro Plant",
-        "icon": "🌊",
-        "desc": "Потребує Hydro Potential поруч. Дає стабільний екологічний дохід.",
-        "build_cost": 950,
-        "upkeep": 0,
-        "base_income_per_hour": 78,
-        "requires": {"hydro": 1}
-    },
-    "farm_complex": {
-        "name": "Farm Complex",
-        "icon": "🌾",
-        "desc": "Аграрний комплекс. Потребує Farmland. Низький cost — ранній буст.",
-        "build_cost": 650,
-        "upkeep": 0,
-        "base_income_per_hour": 52,
-        "requires": {"farmland": 1}
-    },
-    "waterworks": {
-        "name": "Waterworks",
-        "icon": "💧",
-        "desc": "Водоканал. Потребує Water поруч. Дає базовий дохід + підсилює інші фабрики (пізніше).",
-        "build_cost": 720,
-        "upkeep": 0,
-        "base_income_per_hour": 50,
-        "requires": {"water": 1}
-    },
-    "rare_lab": {
-        "name": "Rare Lab",
-        "icon": "💎",
-        "desc": "Високий дохід, але рідкі ресурси. Потребує Rare Minerals.",
-        "build_cost": 1400,
-        "upkeep": 0,
-        "base_income_per_hour": 130,
-        "requires": {"rare": 1}
-    },
-    "gold_mint": {
-        "name": "Gold Mint",
-        "icon": "🪙",
-        "desc": "Монетний двір. Потребує Gold поруч. Потужний прибуток.",
-        "build_cost": 1350,
-        "upkeep": 0,
-        "base_income_per_hour": 125,
-        "requires": {"gold": 1}
-    },
-    "shipyard": {
-        "name": "Shipyard",
-        "icon": "⚓",
-        "desc": "Верф. Потребує Fish (прибережні зони). Дохід середній, але круто виглядає на карті.",
-        "build_cost": 1000,
-        "upkeep": 0,
-        "base_income_per_hour": 88,
-        "requires": {"fish": 1}
-    },
+    "steel_mill": {"name":"Steel Mill","icon":"🏗️","desc":"Переробляє Iron+Coal в стабільний прибуток.","build_cost":900,"upkeep":0,"base_income_per_hour":70,"requires":{"iron":1,"coal":1}},
+    "oil_refinery": {"name":"Oil Refinery","icon":"🛢️","desc":"Нафта → гроші. Потребує Oil поряд.","build_cost":1100,"upkeep":0,"base_income_per_hour":95,"requires":{"oil":1}},
+    "gas_plant": {"name":"Gas Plant","icon":"🔥","desc":"Газова енергетика. Стабільний дохід.","build_cost":980,"upkeep":0,"base_income_per_hour":82,"requires":{"gas":1}},
+    "hydro_plant": {"name":"Hydro Plant","icon":"🌊","desc":"Потребує Hydro Potential поруч.","build_cost":950,"upkeep":0,"base_income_per_hour":78,"requires":{"hydro":1}},
+    "farm_complex": {"name":"Farm Complex","icon":"🌾","desc":"Потребує Farmland.","build_cost":650,"upkeep":0,"base_income_per_hour":52,"requires":{"farmland":1}},
+    "waterworks": {"name":"Waterworks","icon":"💧","desc":"Потребує Water поруч.","build_cost":720,"upkeep":0,"base_income_per_hour":50,"requires":{"water":1}},
+    "rare_lab": {"name":"Rare Lab","icon":"💎","desc":"Потребує Rare Minerals.","build_cost":1400,"upkeep":0,"base_income_per_hour":130,"requires":{"rare":1}},
+    "gold_mint": {"name":"Gold Mint","icon":"🪙","desc":"Потребує Gold поруч.","build_cost":1350,"upkeep":0,"base_income_per_hour":125,"requires":{"gold":1}},
+    "shipyard": {"name":"Shipyard","icon":"⚓","desc":"Потребує Fish.","build_cost":1000,"upkeep":0,"base_income_per_hour":88,"requires":{"fish":1}},
 }
+
 
 # ---------------------------
 # DB models
@@ -312,8 +241,6 @@ class Country(db.Model):
 
     area_km2 = db.Column(db.Float, nullable=False, default=0.0)
     create_cost = db.Column(db.Integer, nullable=False, default=0)
-
-    # {"type":"Polygon","coordinates":[...]}
     geom_json = db.Column(db.Text, nullable=False)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -347,8 +274,8 @@ class Factory(db.Model):
     country_id = db.Column(db.Integer, db.ForeignKey("country.id"), nullable=False)
     owner_user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
 
-    blueprint = db.Column(db.String(60), nullable=False)     # key in FACTORY_BLUEPRINTS
-    name = db.Column(db.String(120), nullable=False)         # display name
+    blueprint = db.Column(db.String(60), nullable=False)
+    name = db.Column(db.String(120), nullable=False)
     icon = db.Column(db.String(16), nullable=False, default="🏭")
 
     lng = db.Column(db.Float, nullable=False)
@@ -357,8 +284,6 @@ class Factory(db.Model):
     level = db.Column(db.Integer, nullable=False, default=1)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-
-    # money accrual
     stored_coins = db.Column(db.Integer, default=0, nullable=False)
     last_collected_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
@@ -404,24 +329,32 @@ def parse_confirm_token(token: str):
     return _serializer().loads(token, max_age=TOKEN_MAX_AGE_SECONDS)
 
 def absolute_url(path: str) -> str:
+    # request.url_root respects ProxyFix -> correct https on Heroku
     return urljoin(request.url_root, path.lstrip("/"))
 
 def send_confirmation_email(user: User) -> dict:
     token = make_confirm_token(user)
     link = absolute_url(url_for("confirm_email", token=token))
 
+    # Dev fallback
     if not app.config["MAIL_USERNAME"] or not app.config["MAIL_PASSWORD"]:
         print("\n[DEV] Confirmation link:", link, "\n")
         return {"sent": False, "dev_link": link}
 
-    html = render_template("email_confirm.html", username=user.username, link=link)
-    msg = Message(
-        subject="Підтвердження email — EarthCity",
-        recipients=[user.email],
-        html=html
-    )
-    mail.send(msg)
-    return {"sent": True, "dev_link": None}
+    try:
+        html = render_template("email_confirm.html", username=user.username, link=link)
+        msg = Message(
+            subject="Підтвердження email — EarthCity",
+            recipients=[user.email],
+            html=html
+        )
+        mail.send(msg)
+        return {"sent": True, "dev_link": None}
+    except Exception as e:
+        # Don't crash registration if mail fails
+        print("\n[MAIL ERROR]", repr(e))
+        print("[DEV] Confirmation link:", link, "\n")
+        return {"sent": False, "dev_link": link}
 
 
 # ---------------------------
@@ -438,24 +371,17 @@ def globe_page():
 @app.get("/api/me")
 def api_me():
     if not current_user.is_authenticated:
-        return jsonify({
-            "authenticated": False,
-            "username": None,
-            "email": None,
-            "is_confirmed": False,
-            "coins": 0,
-            "has_country": False
-        })
+        return jsonify(authenticated=False, username=None, email=None, is_confirmed=False, coins=0, has_country=False)
 
     has_country = Country.query.filter_by(owner_user_id=current_user.id).first() is not None
-    return jsonify({
-        "authenticated": True,
-        "username": current_user.username,
-        "email": current_user.email,
-        "is_confirmed": bool(current_user.is_confirmed),
-        "coins": int(current_user.coins or 0),
-        "has_country": bool(has_country)
-    })
+    return jsonify(
+        authenticated=True,
+        username=current_user.username,
+        email=current_user.email,
+        is_confirmed=bool(current_user.is_confirmed),
+        coins=int(current_user.coins or 0),
+        has_country=bool(has_country)
+    )
 
 
 @app.post("/api/register")
@@ -546,11 +472,7 @@ def confirm_email(token: str):
         user.confirmed_at = datetime.utcnow()
         db.session.commit()
 
-    return render_template(
-        "confirm_result.html",
-        ok=True,
-        msg="Email підтверджено ✅ Повернись на вкладку з глобусом і зроби Login (або перезавантаж сторінку)."
-    )
+    return render_template("confirm_result.html", ok=True, msg="Email підтверджено ✅ Повернись на вкладку з глобусом і зроби Login (або перезавантаж сторінку).")
 
 
 # ---------------------------
@@ -564,7 +486,6 @@ def api_rules():
         "country_cost_per_1000_km2": COUNTRY_COST_PER_1000_KM2,
         "country_max_area_km2": COUNTRY_MAX_AREA_KM2,
         "country_max_points": COUNTRY_MAX_POINTS,
-
         "factory_place_fee": FACTORY_PLACE_FEE,
         "factory_pick_radius_km": FACTORY_PICK_RADIUS_KM,
         "factory_max_per_country": FACTORY_MAX_PER_COUNTRY
@@ -588,7 +509,6 @@ def api_resources():
 
 @app.get("/api/blueprints")
 def api_blueprints():
-    # safe shape for front-end
     items = []
     for key, bp in FACTORY_BLUEPRINTS.items():
         items.append({
@@ -652,7 +572,6 @@ def api_countries_create():
     if not current_user.is_confirmed:
         return jsonify(ok=False, error="Email not confirmed"), 403
 
-    # ONE COUNTRY PER USER
     already = Country.query.filter_by(owner_user_id=current_user.id).first()
     if already:
         return jsonify(ok=False, error="Ти вже маєш країну. 1 акаунт = 1 країна."), 409
@@ -707,7 +626,6 @@ def api_country_details(cid: int):
     owner = db.session.get(User, c.owner_user_id)
     owner_username = owner.username if owner else "Unknown"
 
-    # Count factories
     f_count = Factory.query.filter_by(country_id=c.id).count()
 
     return jsonify(ok=True, data={
@@ -728,8 +646,7 @@ def api_country_details(cid: int):
 def _country_polygon_ring(country: Country):
     try:
         geom = json.loads(country.geom_json)
-        ring = geom["coordinates"][0]
-        return ring
+        return geom["coordinates"][0]
     except Exception:
         return None
 
@@ -740,22 +657,13 @@ def _resources_near_point_in_country(country: Country, lng: float, lat: float):
 
     near = []
     for n in RESOURCE_NODES:
-        # must be inside country polygon
         if not point_in_polygon(n["lng"], n["lat"], ring):
             continue
-        # must be near building point
         if haversine_km(lng, lat, n["lng"], n["lat"]) <= FACTORY_PICK_RADIUS_KM:
             near.append(n)
     return near
 
 def _calc_factory_rate_per_hour(factory: Factory) -> float:
-    """
-    Rate depends on blueprint base income and local resource strength.
-    Simple and cool:
-      effective_strength = avg strength of required resource types near factory (0..1)
-      multiplier = 0.75 + 0.65*effective_strength  (range ~0.75..1.40)
-      level multiplier = 1 + (level-1)*0.22
-    """
     bp = FACTORY_BLUEPRINTS.get(factory.blueprint)
     if not bp:
         return 0.0
@@ -763,10 +671,10 @@ def _calc_factory_rate_per_hour(factory: Factory) -> float:
     base = float(bp.get("base_income_per_hour", 0))
     level = int(factory.level or 1)
 
-    # recompute strength near factory
     country = db.session.get(Country, factory.country_id)
     if not country:
         return 0.0
+
     near = _resources_near_point_in_country(country, factory.lng, factory.lat)
     req = bp.get("requires", {})
 
@@ -784,16 +692,13 @@ def _calc_factory_rate_per_hour(factory: Factory) -> float:
     lvl_mult = 1.0 + (max(0, level - 1) * 0.22)
     return base * mult * lvl_mult
 
-
 def _accrue_factory(factory: Factory, now: datetime):
     last = factory.last_collected_at or now
     dt_hours = (now - last).total_seconds() / 3600.0
     if dt_hours <= 0:
         return
 
-    # cap offline
     dt_hours = min(dt_hours, FACTORY_ACCUM_CAP_HOURS)
-
     rate = _calc_factory_rate_per_hour(factory)
     gain = int(math.floor(rate * dt_hours))
     if gain > 0:
@@ -803,9 +708,6 @@ def _accrue_factory(factory: Factory, now: datetime):
 
 @app.get("/api/factories")
 def api_factories_list():
-    """
-    Returns all factories as GeoJSON for map markers (public).
-    """
     items = Factory.query.order_by(Factory.created_at.asc()).all()
     fc = {"type": "FeatureCollection", "features": [f.to_feature() for f in items]}
     return jsonify(ok=True, data=fc)
@@ -814,9 +716,6 @@ def api_factories_list():
 @app.get("/api/my/factories")
 @login_required
 def api_my_factories():
-    """
-    Returns my factories with accrual preview.
-    """
     now = datetime.utcnow()
     items = Factory.query.filter_by(owner_user_id=current_user.id).all()
     out = []
@@ -841,10 +740,6 @@ def api_my_factories():
 @app.post("/api/factories")
 @login_required
 def api_factory_build():
-    """
-    Build a factory at a map point.
-    Body: { country_id, blueprint, lng, lat }
-    """
     if not current_user.is_confirmed:
         return jsonify(ok=False, error="Email not confirmed"), 403
 
@@ -869,7 +764,6 @@ def api_factory_build():
     if country.owner_user_id != current_user.id:
         return jsonify(ok=False, error="Not your country"), 403
 
-    # limit factories per country
     cnt = Factory.query.filter_by(country_id=country.id).count()
     if cnt >= FACTORY_MAX_PER_COUNTRY:
         return jsonify(ok=False, error=f"Factory limit reached (max {FACTORY_MAX_PER_COUNTRY})"), 400
@@ -884,8 +778,6 @@ def api_factory_build():
     if int(current_user.coins or 0) < total_cost:
         return jsonify(ok=False, error=f"Недостатньо монет. Треба {total_cost} EC."), 400
 
-    # Resource requirements:
-    # You must have required resource nodes inside country and within radius of building point.
     near = _resources_near_point_in_country(country, float(lng), float(lat))
     req = bp.get("requires", {})
     missing = []
@@ -901,7 +793,6 @@ def api_factory_build():
     if missing:
         return jsonify(ok=False, error=f"Нема потрібних ресурсів поруч: {', '.join(missing)} (радіус {FACTORY_PICK_RADIUS_KM} км)."), 400
 
-    # charge
     current_user.coins = int(current_user.coins or 0) - total_cost
 
     f = Factory(
@@ -942,7 +833,6 @@ def api_factory_collect(fid: int):
     f.stored_coins = 0
     current_user.coins = int(current_user.coins or 0) + amount
     db.session.commit()
-
     return jsonify(ok=True, collected=amount, coins=int(current_user.coins or 0))
 
 
@@ -955,12 +845,9 @@ def api_factory_upgrade(fid: int):
     if f.owner_user_id != current_user.id:
         return jsonify(ok=False, error="Not yours"), 403
 
-    # accrue first so you don't lose time
     now = datetime.utcnow()
     _accrue_factory(f, now)
 
-    # Upgrade cost scales
-    # Lv2 = 350, Lv3=520, Lv4=760...
     next_lvl = int(f.level or 1) + 1
     cost = int(260 * (next_lvl ** 1.55))
 
@@ -970,7 +857,6 @@ def api_factory_upgrade(fid: int):
     current_user.coins = int(current_user.coins or 0) - cost
     f.level = next_lvl
     db.session.commit()
-
     return jsonify(ok=True, level=int(f.level), coins=int(current_user.coins or 0))
 
 
@@ -988,4 +874,4 @@ def email_preview():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-    app.run()
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=not is_prod)
