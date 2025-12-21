@@ -273,15 +273,22 @@ class Factory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     country_id = db.Column(db.Integer, db.ForeignKey("country.id"), nullable=False)
     owner_user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
-    blueprint = db.Column(db.String(60), nullable=False)
-    name = db.Column(db.String(120), nullable=False)
+
+    blueprint = db.Column(db.String(60), nullable=False)     # key in FACTORY_BLUEPRINTS
+    name = db.Column(db.String(120), nullable=False)         # display name
     icon = db.Column(db.String(16), nullable=False, default="🏭")
+
     lng = db.Column(db.Float, nullable=False)
     lat = db.Column(db.Float, nullable=False)
+
     level = db.Column(db.Integer, nullable=False, default=1)
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    # money accrual
     stored_coins = db.Column(db.Integer, default=0, nullable=False)
     last_collected_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
     country = db.relationship("Country", lazy=True)
 
     def to_feature(self):
@@ -298,7 +305,6 @@ class Factory(db.Model):
             },
             "geometry": {"type": "Point", "coordinates": [float(self.lng), float(self.lat)]}
         }
-
 
 @login_manager.user_loader
 def load_user(user_id: str):
