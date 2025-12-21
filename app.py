@@ -119,13 +119,15 @@ login_manager.login_view = None
 def rad(d: float) -> float:
     return d * math.pi / 180.0
 
+
 def haversine_km(lng1, lat1, lng2, lat2) -> float:
     R = 6371.0088
     dlat = rad(lat2 - lat1)
     dlng = rad(lng2 - lng1)
-    a = math.sin(dlat/2)**2 + math.cos(rad(lat1)) * math.cos(rad(lat2)) * math.sin(dlng/2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    a = math.sin(dlat / 2) ** 2 + math.cos(rad(lat1)) * math.cos(rad(lat2)) * math.sin(dlng / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
+
 
 def point_in_polygon(lng: float, lat: float, ring) -> bool:
     if not ring or len(ring) < 4:
@@ -141,6 +143,7 @@ def point_in_polygon(lng: float, lat: float, ring) -> bool:
             inside = not inside
         j = i
     return inside
+
 
 def polygon_area_km2_equirect(geom: dict) -> float:
     R = 6371.0088
@@ -166,62 +169,63 @@ def polygon_area_km2_equirect(geom: dict) -> float:
 
     return abs(s) / 2.0
 
+
 def compute_country_cost(area_km2: float) -> int:
     return int(round(COUNTRY_BASE_COST + (area_km2 / 1000.0) * COUNTRY_COST_PER_1000_KM2))
 
 
 # ---------------------------
-# Resources & Blueprints (same as yours, shortened note: keep as-is)
+# Resources & Blueprints (keep as-is)
 # ---------------------------
 RESOURCE_NODES = [
-    {"type":"oil", "name":"Oil Basin", "lng":50.5, "lat":24.0, "strength":0.95},
-    {"type":"oil", "name":"Oil Field", "lng":44.0, "lat":30.0, "strength":0.78},
-    {"type":"oil", "name":"Oil Sands", "lng":-113.5, "lat":56.0, "strength":0.66},
-    {"type":"oil", "name":"Offshore Oil", "lng":6.5, "lat":53.2, "strength":0.71},
-    {"type":"gas", "name":"Gas Field", "lng":56.0, "lat":25.5, "strength":0.86},
-    {"type":"gas", "name":"Gas Field", "lng":36.0, "lat":31.0, "strength":0.72},
-    {"type":"gas", "name":"Gas Field", "lng":65.0, "lat":39.0, "strength":0.77},
-    {"type":"gas", "name":"Gas Field", "lng":133.0, "lat":-23.0, "strength":0.73},
+    {"type": "oil", "name": "Oil Basin", "lng": 50.5, "lat": 24.0, "strength": 0.95},
+    {"type": "oil", "name": "Oil Field", "lng": 44.0, "lat": 30.0, "strength": 0.78},
+    {"type": "oil", "name": "Oil Sands", "lng": -113.5, "lat": 56.0, "strength": 0.66},
+    {"type": "oil", "name": "Offshore Oil", "lng": 6.5, "lat": 53.2, "strength": 0.71},
+    {"type": "gas", "name": "Gas Field", "lng": 56.0, "lat": 25.5, "strength": 0.86},
+    {"type": "gas", "name": "Gas Field", "lng": 36.0, "lat": 31.0, "strength": 0.72},
+    {"type": "gas", "name": "Gas Field", "lng": 65.0, "lat": 39.0, "strength": 0.77},
+    {"type": "gas", "name": "Gas Field", "lng": 133.0, "lat": -23.0, "strength": 0.73},
 
-    {"type":"iron", "name":"Iron Ore", "lng":32.2, "lat":47.8, "strength":0.88},
-    {"type":"iron", "name":"Iron Deposit", "lng":107.0, "lat":52.0, "strength":0.67},
-    {"type":"iron", "name":"Iron Ore", "lng":-74.0, "lat":5.0, "strength":0.70},
-    {"type":"gold", "name":"Gold", "lng":-2.0, "lat":7.0, "strength":0.72},
-    {"type":"gold", "name":"Gold", "lng":120.5, "lat":-3.0, "strength":0.60},
-    {"type":"rare", "name":"Rare Minerals", "lng":28.0, "lat":-3.0, "strength":0.78},
-    {"type":"rare", "name":"Rare Minerals", "lng":103.0, "lat":26.0, "strength":0.70},
-    {"type":"uranium", "name":"Uranium", "lng":133.0, "lat":-22.0, "strength":0.72},
-    {"type":"coal", "name":"Coal", "lng":24.5, "lat":49.5, "strength":0.82},
-    {"type":"coal", "name":"Coal", "lng":88.0, "lat":23.0, "strength":0.70},
-    {"type":"coal", "name":"Coal", "lng":147.0, "lat":-33.0, "strength":0.66},
+    {"type": "iron", "name": "Iron Ore", "lng": 32.2, "lat": 47.8, "strength": 0.88},
+    {"type": "iron", "name": "Iron Deposit", "lng": 107.0, "lat": 52.0, "strength": 0.67},
+    {"type": "iron", "name": "Iron Ore", "lng": -74.0, "lat": 5.0, "strength": 0.70},
+    {"type": "gold", "name": "Gold", "lng": -2.0, "lat": 7.0, "strength": 0.72},
+    {"type": "gold", "name": "Gold", "lng": 120.5, "lat": -3.0, "strength": 0.60},
+    {"type": "rare", "name": "Rare Minerals", "lng": 28.0, "lat": -3.0, "strength": 0.78},
+    {"type": "rare", "name": "Rare Minerals", "lng": 103.0, "lat": 26.0, "strength": 0.70},
+    {"type": "uranium", "name": "Uranium", "lng": 133.0, "lat": -22.0, "strength": 0.72},
+    {"type": "coal", "name": "Coal", "lng": 24.5, "lat": 49.5, "strength": 0.82},
+    {"type": "coal", "name": "Coal", "lng": 88.0, "lat": 23.0, "strength": 0.70},
+    {"type": "coal", "name": "Coal", "lng": 147.0, "lat": -33.0, "strength": 0.66},
 
-    {"type":"water", "name":"Fresh Water", "lng":90.0, "lat":23.8, "strength":0.90},
-    {"type":"water", "name":"Fresh Water", "lng":30.5, "lat":-1.3, "strength":0.76},
-    {"type":"water", "name":"Fresh Water", "lng":137.0, "lat":36.0, "strength":0.74},
-    {"type":"farmland", "name":"Farmland", "lng":31.2, "lat":49.2, "strength":0.88},
-    {"type":"farmland", "name":"Farmland", "lng":10.5, "lat":50.7, "strength":0.74},
-    {"type":"farmland", "name":"Farmland", "lng":-58.0, "lat":-34.5, "strength":0.66},
-    {"type":"fish", "name":"Fishing Zone", "lng":142.0, "lat":41.5, "strength":0.72},
-    {"type":"fish", "name":"Fishing Zone", "lng":16.0, "lat":55.5, "strength":0.68},
+    {"type": "water", "name": "Fresh Water", "lng": 90.0, "lat": 23.8, "strength": 0.90},
+    {"type": "water", "name": "Fresh Water", "lng": 30.5, "lat": -1.3, "strength": 0.76},
+    {"type": "water", "name": "Fresh Water", "lng": 137.0, "lat": 36.0, "strength": 0.74},
+    {"type": "farmland", "name": "Farmland", "lng": 31.2, "lat": 49.2, "strength": 0.88},
+    {"type": "farmland", "name": "Farmland", "lng": 10.5, "lat": 50.7, "strength": 0.74},
+    {"type": "farmland", "name": "Farmland", "lng": -58.0, "lat": -34.5, "strength": 0.66},
+    {"type": "fish", "name": "Fishing Zone", "lng": 142.0, "lat": 41.5, "strength": 0.72},
+    {"type": "fish", "name": "Fishing Zone", "lng": 16.0, "lat": 55.5, "strength": 0.68},
 
-    {"type":"wind", "name":"Wind Zone", "lng":8.0, "lat":56.0, "strength":0.75},
-    {"type":"wind", "name":"Wind Zone", "lng":145.0, "lat":-35.0, "strength":0.73},
-    {"type":"solar", "name":"Solar", "lng":25.0, "lat":23.0, "strength":0.86},
-    {"type":"solar", "name":"Solar", "lng":-112.0, "lat":34.0, "strength":0.78},
-    {"type":"hydro", "name":"Hydro Potential", "lng":85.0, "lat":28.0, "strength":0.78},
-    {"type":"geo", "name":"Geothermal", "lng":-21.9, "lat":64.9, "strength":0.64},
+    {"type": "wind", "name": "Wind Zone", "lng": 8.0, "lat": 56.0, "strength": 0.75},
+    {"type": "wind", "name": "Wind Zone", "lng": 145.0, "lat": -35.0, "strength": 0.73},
+    {"type": "solar", "name": "Solar", "lng": 25.0, "lat": 23.0, "strength": 0.86},
+    {"type": "solar", "name": "Solar", "lng": -112.0, "lat": 34.0, "strength": 0.78},
+    {"type": "hydro", "name": "Hydro Potential", "lng": 85.0, "lat": 28.0, "strength": 0.78},
+    {"type": "geo", "name": "Geothermal", "lng": -21.9, "lat": 64.9, "strength": 0.64},
 ]
 
 FACTORY_BLUEPRINTS = {
-    "steel_mill": {"name":"Steel Mill","icon":"🏗️","desc":"Iron+Coal → profit","build_cost":900,"upkeep":0,"base_income_per_hour":70,"requires":{"iron":1,"coal":1}},
-    "oil_refinery":{"name":"Oil Refinery","icon":"🛢️","desc":"Oil → money","build_cost":1100,"upkeep":0,"base_income_per_hour":95,"requires":{"oil":1}},
-    "gas_plant":{"name":"Gas Plant","icon":"🔥","desc":"Gas → profit","build_cost":980,"upkeep":0,"base_income_per_hour":82,"requires":{"gas":1}},
-    "hydro_plant":{"name":"Hydro Plant","icon":"🌊","desc":"Hydro → profit","build_cost":950,"upkeep":0,"base_income_per_hour":78,"requires":{"hydro":1}},
-    "farm_complex":{"name":"Farm Complex","icon":"🌾","desc":"Farmland → profit","build_cost":650,"upkeep":0,"base_income_per_hour":52,"requires":{"farmland":1}},
-    "waterworks":{"name":"Waterworks","icon":"💧","desc":"Water → profit","build_cost":720,"upkeep":0,"base_income_per_hour":50,"requires":{"water":1}},
-    "rare_lab":{"name":"Rare Lab","icon":"💎","desc":"Rare → big profit","build_cost":1400,"upkeep":0,"base_income_per_hour":130,"requires":{"rare":1}},
-    "gold_mint":{"name":"Gold Mint","icon":"🪙","desc":"Gold → big profit","build_cost":1350,"upkeep":0,"base_income_per_hour":125,"requires":{"gold":1}},
-    "shipyard":{"name":"Shipyard","icon":"⚓","desc":"Fish → profit","build_cost":1000,"upkeep":0,"base_income_per_hour":88,"requires":{"fish":1}},
+    "steel_mill": {"name": "Steel Mill", "icon": "🏗️", "desc": "Iron+Coal → profit", "build_cost": 900, "upkeep": 0, "base_income_per_hour": 70, "requires": {"iron": 1, "coal": 1}},
+    "oil_refinery": {"name": "Oil Refinery", "icon": "🛢️", "desc": "Oil → money", "build_cost": 1100, "upkeep": 0, "base_income_per_hour": 95, "requires": {"oil": 1}},
+    "gas_plant": {"name": "Gas Plant", "icon": "🔥", "desc": "Gas → profit", "build_cost": 980, "upkeep": 0, "base_income_per_hour": 82, "requires": {"gas": 1}},
+    "hydro_plant": {"name": "Hydro Plant", "icon": "🌊", "desc": "Hydro → profit", "build_cost": 950, "upkeep": 0, "base_income_per_hour": 78, "requires": {"hydro": 1}},
+    "farm_complex": {"name": "Farm Complex", "icon": "🌾", "desc": "Farmland → profit", "build_cost": 650, "upkeep": 0, "base_income_per_hour": 52, "requires": {"farmland": 1}},
+    "waterworks": {"name": "Waterworks", "icon": "💧", "desc": "Water → profit", "build_cost": 720, "upkeep": 0, "base_income_per_hour": 50, "requires": {"water": 1}},
+    "rare_lab": {"name": "Rare Lab", "icon": "💎", "desc": "Rare → big profit", "build_cost": 1400, "upkeep": 0, "base_income_per_hour": 130, "requires": {"rare": 1}},
+    "gold_mint": {"name": "Gold Mint", "icon": "🪙", "desc": "Gold → big profit", "build_cost": 1350, "upkeep": 0, "base_income_per_hour": 125, "requires": {"gold": 1}},
+    "shipyard": {"name": "Shipyard", "icon": "⚓", "desc": "Fish → profit", "build_cost": 1000, "upkeep": 0, "base_income_per_hour": 88, "requires": {"fish": 1}},
 }
 
 
@@ -236,7 +240,12 @@ class User(db.Model, UserMixin):
     is_confirmed = db.Column(db.Boolean, default=False, nullable=False)
     confirmed_at = db.Column(db.DateTime, nullable=True)
     coins = db.Column(db.Integer, default=START_COINS, nullable=False)
+
+    # NEW: starter bonus lock (so you can safely grant once for old/test accounts)
+    starter_granted = db.Column(db.Boolean, default=True, nullable=False)
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
 
 class Country(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -268,6 +277,7 @@ class Country(db.Model):
             },
             "geometry": geom
         }
+
 
 class Factory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -306,6 +316,7 @@ class Factory(db.Model):
             "geometry": {"type": "Point", "coordinates": [float(self.lng), float(self.lat)]}
         }
 
+
 @login_manager.user_loader
 def load_user(user_id: str):
     try:
@@ -320,11 +331,14 @@ def load_user(user_id: str):
 def _serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(secret_key=app.config["SECRET_KEY"], salt=app.config["SECURITY_SALT"])
 
+
 def make_confirm_token(user: User) -> str:
     return _serializer().dumps({"uid": user.id, "email": user.email})
 
+
 def parse_confirm_token(token: str):
     return _serializer().loads(token, max_age=TOKEN_MAX_AGE_SECONDS)
+
 
 def absolute_url(path: str) -> str:
     # If user provided PUBLIC_BASE_URL, use it (best for stable hosting)
@@ -337,6 +351,7 @@ def absolute_url(path: str) -> str:
     if base2.startswith("http://"):
         base2 = base2.replace("http://", "https://", 1)
     return urljoin(base2, path.lstrip("/"))
+
 
 def send_confirmation_email(user: User) -> dict:
     token = make_confirm_token(user)
@@ -368,6 +383,7 @@ def send_confirmation_email(user: User) -> dict:
 def globe_page():
     return render_template("globe_auth.html")
 
+
 @app.get("/favicon.ico")
 def favicon():
     static_path = os.path.join(app.root_path, "static")
@@ -382,7 +398,15 @@ def favicon():
 @app.get("/api/me")
 def api_me():
     if not current_user.is_authenticated:
-        return jsonify(authenticated=False, username=None, email=None, is_confirmed=False, coins=0, has_country=False)
+        return jsonify(
+            authenticated=False,
+            username=None,
+            email=None,
+            is_confirmed=False,
+            coins=0,
+            has_country=False,
+            starter_granted=False
+        )
 
     has_country = Country.query.filter_by(owner_user_id=current_user.id).first() is not None
     return jsonify(
@@ -391,8 +415,33 @@ def api_me():
         email=current_user.email,
         is_confirmed=bool(current_user.is_confirmed),
         coins=int(current_user.coins or 0),
-        has_country=bool(has_country)
+        has_country=bool(has_country),
+        starter_granted=bool(getattr(current_user, "starter_granted", True))
     )
+
+
+@app.post("/api/me/grant_start_coins")
+@login_required
+def api_grant_start_coins():
+    """
+    Optional helper for old/test accounts.
+    Gives START_COINS only once per account.
+    """
+    # already locked
+    if bool(getattr(current_user, "starter_granted", True)):
+        return jsonify(ok=True, already=True, coins=int(current_user.coins or 0))
+
+    # anti-abuse: if user already has coins >0, we just lock without granting
+    if int(current_user.coins or 0) > 0:
+        current_user.starter_granted = True
+        db.session.commit()
+        return jsonify(ok=True, already=True, coins=int(current_user.coins or 0))
+
+    current_user.coins = int(current_user.coins or 0) + START_COINS
+    current_user.starter_granted = True
+    db.session.commit()
+    return jsonify(ok=True, coins=int(current_user.coins or 0))
+
 
 @app.post("/api/register")
 def api_register():
@@ -420,7 +469,8 @@ def api_register():
         password_hash=generate_password_hash(password),
         is_confirmed=False,
         confirmed_at=None,
-        coins=START_COINS
+        coins=START_COINS,
+        starter_granted=True  # ✅ lock as granted at registration
     )
     db.session.add(user)
     db.session.commit()
@@ -429,6 +479,7 @@ def api_register():
 
     result = send_confirmation_email(user)
     return jsonify(ok=True, sent=result["sent"], dev_link=result["dev_link"], mail_error=result["error"])
+
 
 @app.post("/api/login")
 def api_login():
@@ -443,13 +494,22 @@ def api_login():
     login_user(user)
 
     has_country = Country.query.filter_by(owner_user_id=user.id).first() is not None
-    return jsonify(ok=True, is_confirmed=bool(user.is_confirmed), username=user.username, coins=int(user.coins or 0), has_country=bool(has_country))
+    return jsonify(
+        ok=True,
+        is_confirmed=bool(user.is_confirmed),
+        username=user.username,
+        coins=int(user.coins or 0),
+        has_country=bool(has_country),
+        starter_granted=bool(getattr(user, "starter_granted", True))
+    )
+
 
 @app.post("/api/logout")
 def api_logout():
     if current_user.is_authenticated:
         logout_user()
     return jsonify(ok=True)
+
 
 @app.post("/api/resend-confirmation")
 def api_resend_confirmation():
@@ -460,6 +520,7 @@ def api_resend_confirmation():
 
     result = send_confirmation_email(current_user)
     return jsonify(ok=True, sent=result["sent"], dev_link=result["dev_link"], mail_error=result["error"])
+
 
 @app.get("/confirm/<token>")
 def confirm_email(token: str):
@@ -498,6 +559,7 @@ def api_rules():
         "factory_max_per_country": FACTORY_MAX_PER_COUNTRY
     })
 
+
 @app.get("/api/resources")
 def api_resources():
     fc = {"type": "FeatureCollection", "features": []}
@@ -513,6 +575,7 @@ def api_resources():
             "geometry": {"type": "Point", "coordinates": [float(n["lng"]), float(n["lat"])]}
         })
     return jsonify(ok=True, data=fc)
+
 
 @app.get("/api/blueprints")
 def api_blueprints():
@@ -539,6 +602,7 @@ def api_countries_list():
     fc = {"type": "FeatureCollection", "features": [c.to_feature() for c in countries]}
     return jsonify(ok=True, data=fc)
 
+
 def _validate_polygon(geom: dict):
     if not isinstance(geom, dict):
         return False, "Geometry must be object"
@@ -563,6 +627,7 @@ def _validate_polygon(geom: dict):
     if ring[0] != ring[-1]:
         return False, "Polygon ring must be closed (first==last)"
     return True, ""
+
 
 @app.post("/api/countries")
 def api_countries_create():
@@ -612,8 +677,34 @@ def api_countries_create():
     return jsonify(ok=True, country=country.to_feature(), coins=int(current_user.coins or 0))
 
 
+@app.get("/api/countries/<int:cid>")
+def api_country_details(cid: int):
+    """
+    Used by your country panel in map.js
+    """
+    c = db.session.get(Country, cid)
+    if not c:
+        return jsonify(ok=False, error="Country not found"), 404
+
+    factories_count = Factory.query.filter_by(country_id=c.id).count()
+
+    is_mine = False
+    if current_user.is_authenticated:
+        is_mine = (c.owner_user_id == current_user.id)
+
+    return jsonify(ok=True, data={
+        "id": c.id,
+        "name": c.name,
+        "color": c.color,
+        "area_km2": float(c.area_km2 or 0),
+        "factories": int(factories_count),
+        "owner_username": (c.owner.username if c.owner else "unknown"),
+        "is_mine": bool(is_mine),
+    })
+
+
 # ---------------------------
-# Factories API (same logic as yours)
+# Factories API
 # ---------------------------
 def _country_polygon_ring(country: Country):
     try:
@@ -622,32 +713,27 @@ def _country_polygon_ring(country: Country):
     except Exception:
         return None
 
-def _resources_near_point_in_country(country: Country, lng: float, lat: float):
-    ring = _country_polygon_ring(country)
-    if not ring:
-        return []
-    near = []
-    for n in RESOURCE_NODES:
-        if not point_in_polygon(n["lng"], n["lat"], ring):
-            continue
-        if haversine_km(lng, lat, n["lng"], n["lat"]) <= FACTORY_PICK_RADIUS_KM:
-            near.append(n)
-    return near
 
 def _resources_near_point_in_country(country: Country, lng: float, lat: float):
+    """
+    Returns resource nodes that are:
+    - inside the country polygon
+    - within FACTORY_PICK_RADIUS_KM from (lng, lat)
+    """
     ring = _country_polygon_ring(country)
     if not ring:
         return []
 
     near = []
     for n in RESOURCE_NODES:
-        # must be inside country polygon
+        # must be inside polygon
         if not point_in_polygon(n["lng"], n["lat"], ring):
             continue
-        # must be near building point
+        # must be near the build point
         if haversine_km(lng, lat, n["lng"], n["lat"]) <= FACTORY_PICK_RADIUS_KM:
             near.append(n)
     return near
+
 
 def _calc_factory_rate_per_hour(factory: Factory) -> float:
     """
@@ -664,10 +750,10 @@ def _calc_factory_rate_per_hour(factory: Factory) -> float:
     base = float(bp.get("base_income_per_hour", 0))
     level = int(factory.level or 1)
 
-    # recompute strength near factory
     country = db.session.get(Country, factory.country_id)
     if not country:
         return 0.0
+
     near = _resources_near_point_in_country(country, factory.lng, factory.lat)
     req = bp.get("requires", {})
 
@@ -873,6 +959,7 @@ def api_factory_upgrade(fid: int):
     db.session.commit()
 
     return jsonify(ok=True, level=int(f.level), coins=int(current_user.coins or 0))
+
 
 # ---------------------------
 # Init DB once per dyno boot

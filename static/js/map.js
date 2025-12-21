@@ -42,12 +42,9 @@
   const btnCancelFactoryMode = $("btnCancelFactoryMode");
   const btnTipFactory = $("btnTipFactory");
   const fbTip = $("fbTip");
-  
+
   // Topbar factories button
-const btnOpenFactories = $("btnOpenFactories");
-
-
-
+  const btnOpenFactories = $("btnOpenFactories");
 
   // ---- Stars background ----
   if (starsEl) {
@@ -153,6 +150,8 @@ const btnOpenFactories = $("btnOpenFactories");
     const r = await fetch("/api/me", { credentials: "include" });
     const j = await r.json().catch(() => ({}));
     ME = j || { authenticated:false };
+
+    // якщо бекенд не дав coins — ставимо 0 (далі може спрацювати видача стартових)
     MY_COINS = (j && typeof j.coins === "number") ? j.coins : 0;
 
     if (myCoinsEl) myCoinsEl.textContent = `${MY_COINS} EC`;
@@ -161,6 +160,43 @@ const btnOpenFactories = $("btnOpenFactories");
 
   function computeCountryCost(areaKm2) {
     return Math.round(RULES.country_base_cost + (areaKm2 / 1000) * RULES.country_cost_per_1000_km2);
+  }
+
+  // ---- START COINS (NEW) ----
+  // MVP: просимо бекенд видати 5000 EC один раз для нового акаунта
+  async function grantStartCoinsIfNeeded() {
+    try {
+      if (!ME || !ME.authenticated) return;
+
+      // Якщо вже є монети — нічого не робимо
+      if (typeof MY_COINS === "number" && MY_COINS > 0) return;
+
+      const key = "ec_startcoins_given_v1";
+      if (localStorage.getItem(key) === "1") return;
+
+      // просимо бекенд видати стартові монети
+      const res = await fetch("/api/me/grant_start_coins", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: RULES.start_coins })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data && data.ok) {
+        if (typeof data.coins === "number") MY_COINS = data.coins;
+        else MY_COINS = RULES.start_coins;
+
+        if (myCoinsEl) myCoinsEl.textContent = `${MY_COINS} EC`;
+        if (myCoinsModalEl) myCoinsModalEl.textContent = `${MY_COINS} EC`;
+
+        localStorage.setItem(key, "1");
+        showFbMsg(`🎁 Starter bonus: +${RULES.start_coins} EC`);
+      }
+    } catch (e) {
+      // тихо ігноруємо, щоб не ламало UI
+      console.warn("grantStartCoinsIfNeeded failed", e);
+    }
   }
 
   // ---- Map style ----
@@ -348,6 +384,16 @@ const btnOpenFactories = $("btnOpenFactories");
         rm.el.classList.add("small"); rm.el.classList.remove("tiny");
       } else {
         rm.el.classList.remove("small"); rm.el.classList.remove("tiny");
+      }
+    }
+    // factories reuse same CSS class logic
+    for (const fm of factoryMarkers) {
+      if (z < 1.6) {
+        fm.el.classList.add("tiny"); fm.el.classList.remove("small");
+      } else if (z < 2.6) {
+        fm.el.classList.add("small"); fm.el.classList.remove("tiny");
+      } else {
+        fm.el.classList.remove("small"); fm.el.classList.remove("tiny");
       }
     }
   }
@@ -808,7 +854,7 @@ const btnOpenFactories = $("btnOpenFactories");
 
       factoryMarkers.push({ marker, el });
     }
-    updateMarkerDetail(); // uses same class logic
+    updateMarkerDetail();
     updateBacksideFactoriesVisibility();
   }
 
@@ -906,11 +952,6 @@ const btnOpenFactories = $("btnOpenFactories");
   // helper: pick my country id (since 1 user = 1 country)
   function myCountryIdFromCountriesFC() {
     if (!ME.authenticated) return null;
-    const meId = null; // we don't have id on /api/me, so detect by owner_user_id==? not possible
-    // We'll infer by "owner_user_id" comparison only if backend includes user_id.
-    // For MVP: fetch /api/countries and pick the one with owner_user_id == window.__ME_ID if you add it.
-    // Simple workaround: call /api/my/factories and store country_id there later.
-    // BUT we do better: use /api/countries and compare "owner" == ME.username
     const feats = countriesFC.features || [];
     const mine = feats.find(f => (f.properties && (f.properties.owner === ME.username)));
     return mine ? Number(mine.properties.id) : null;
@@ -955,6 +996,9 @@ const btnOpenFactories = $("btnOpenFactories");
 
     await loadRules();
     await refreshMe();
+
+    // NEW: видаємо 5000 EC на старт (через бекенд) якщо треба
+    await grantStartCoinsIfNeeded();
 
     await loadResources();
     addResourceLayers();
@@ -1005,10 +1049,9 @@ const btnOpenFactories = $("btnOpenFactories");
   map.on("click", async (e) => {
     // Build factory mode
     if (mode === "factory_build") {
-      // don't build when clicking over existing polygons
       const feats = map.queryRenderedFeatures(e.point, { layers: ["countries-fill"] });
       if (!feats || !feats.length) {
-        // You may allow building only if inside your country - server will check anyway
+        // allow, server will validate
       }
       return buildFactoryAt(e.lngLat.lng, e.lngLat.lat);
     }
@@ -1077,13 +1120,11 @@ const btnOpenFactories = $("btnOpenFactories");
       fbTip.style.display = (fbTip.style.display === "none" || !fbTip.style.display) ? "block" : "none";
     });
   }
-  /* =========================================================
-   COUNTRY PANEL + FACTORIES PANEL (ADD-ON BLOCK)
-   Paste this at the VERY END of map.js
-   ========================================================= */
 
-// ---------- UI refs ----------
-  
+  /* =========================================================
+     COUNTRY PANEL + FACTORIES PANEL (ADD-ON BLOCK)
+     Paste this at the VERY END of map.js
+     ========================================================= */
 
   const countryPanel = document.getElementById("countryPanel");
   const cpClose = document.getElementById("cpClose");
@@ -1096,8 +1137,6 @@ const btnOpenFactories = $("btnOpenFactories");
   const cpId = document.getElementById("cpId");
   const cpFly = document.getElementById("cpFly");
   const cpOpenFactories = document.getElementById("cpOpenFactories");
-
-  
 
   // ---------- STATE ----------
   let factoriesPanelOpen = false;
@@ -1198,7 +1237,7 @@ const btnOpenFactories = $("btnOpenFactories");
     cpFly.addEventListener("click", () => {
       if (!currentCountryPanelId) return;
 
-      const feat = (window.countriesFC?.features || []).find(
+      const feat = (countriesFC?.features || []).find(
         f => Number(f.properties?.id) === Number(currentCountryPanelId)
       );
       if (!feat) return;
@@ -1223,22 +1262,20 @@ const btnOpenFactories = $("btnOpenFactories");
     });
   }
 
-    if (cpOpenFactories) {
-      cpOpenFactories.addEventListener("click", () => {
-        setFactoriesPanel(true);
-      });
-    }
+  if (cpOpenFactories) {
+    cpOpenFactories.addEventListener("click", () => {
+      setFactoriesPanel(true);
+    });
+  }
 
-    // ---------- INIT ----------
-    setFactoriesPanel(false);
-    const fbClose = document.getElementById("fbClose");
+  // ---------- INIT ----------
+  setFactoriesPanel(false);
+  const fbClose = document.getElementById("fbClose");
 
   if (fbClose && factorybar) {
     fbClose.addEventListener("click", () => {
-      // закрити панель factories
       factorybar.classList.remove("open");
-      // якщо хочеш ще й вийти з режиму будівлі:
-      // setMode("explore");
+      // setMode("explore"); // optional
     });
   }
 
