@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>EarthCity — Admin Panel</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+
+  <style>
+    :root{
+      --bg:#0b0f14;
+      --panel: rgba(18,22,30,.78);
+      --panel2: rgba(18,22,30,.6);
+      --border: rgba(255,255,255,.12);
+      --text:#e7eefc;
+      --muted: rgba(231,238,252,.72);
+      --good:#22c55e;
+      --bad:#ef4444;
+      --warn:#f59e0b;
+      --accent:#7c3aed;
+      --shadow: 0 18px 60px rgba(0,0,0,.45);
+      --r: 18px;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      background: radial-gradient(1200px 800px at 20% 0%, rgba(124,58,237,.25), transparent 60%),
+                  radial-gradient(900px 700px at 90% 20%, rgba(34,197,94,.12), transparent 55%),
+                  var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    a{color:inherit}
+    .wrap{
+      max-width: 1100px;
+      margin: 28px auto;
+      padding: 0 16px;
+    }
+    .top{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .brand{
+      display:flex; align-items:center; gap:12px;
+    }
+    .logo{
+      width:44px;height:44px;border-radius:14px;
+      background: linear-gradient(135deg, rgba(124,58,237,.95), rgba(59,130,246,.75));
+      display:flex;align-items:center;justify-content:center;
+      font-weight:900;
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(255,255,255,.14);
+    }
+    .title{
+      font-weight:900;
+      letter-spacing:.2px;
+      font-size: 18px;
+      line-height: 1.1;
+    }
+    .subtitle{
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .btn{
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      border-radius: 14px;
+      padding: 10px 12px;
+      font-weight:700;
+      cursor:pointer;
+      transition: .15s ease;
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+    }
+    .btn:hover{ transform: translateY(-1px); background: rgba(255,255,255,.09); }
+    .btn.primary{
+      background: linear-gradient(135deg, rgba(124,58,237,.95), rgba(59,130,246,.85));
+      border-color: rgba(255,255,255,.14);
+    }
+    .btn.danger{ background: rgba(239,68,68,.16); border-color: rgba(239,68,68,.25); }
+    .btn.good{ background: rgba(34,197,94,.16); border-color: rgba(34,197,94,.25); }
+    .btn.warn{ background: rgba(245,158,11,.16); border-color: rgba(245,158,11,.25); }
+
+    .card{
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      box-shadow: var(--shadow);
+      overflow:hidden;
+    }
+    .cardHead{
+      padding: 14px 14px;
+      display:flex;
+      gap: 12px;
+      align-items:center;
+      justify-content:space-between;
+      background: var(--panel2);
+      border-bottom: 1px solid var(--border);
+    }
+    .row{
+      display:flex; gap: 10px; align-items:center; flex-wrap:wrap;
+    }
+    .pill{
+      padding: 8px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.06);
+      font-size: 12px;
+      color: var(--muted);
+      display:inline-flex; gap:8px; align-items:center;
+    }
+    input{
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      outline: none;
+      min-width: 240px;
+      font-weight: 600;
+    }
+    input::placeholder{color: rgba(231,238,252,.45)}
+    table{
+      width:100%;
+      border-collapse: collapse;
+    }
+    th, td{
+      padding: 12px 12px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      vertical-align: middle;
+      font-size: 14px;
+    }
+    th{
+      font-size: 12px;
+      color: rgba(231,238,252,.65);
+      text-transform: uppercase;
+      letter-spacing: .12em;
+      background: rgba(255,255,255,.04);
+    }
+    tr:hover td{ background: rgba(255,255,255,.03); }
+    .mono{ font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+    .tag{
+      font-size: 12px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      color: var(--muted);
+      background: rgba(255,255,255,.05);
+    }
+    .tag.good{ border-color: rgba(34,197,94,.28); background: rgba(34,197,94,.12); color: rgba(187,255,214,.9); }
+    .tag.bad{ border-color: rgba(239,68,68,.28); background: rgba(239,68,68,.12); color: rgba(255,196,196,.9); }
+    .tag.warn{ border-color: rgba(245,158,11,.3); background: rgba(245,158,11,.12); color: rgba(255,231,186,.92); }
+
+    .actions{
+      display:flex; gap:8px; flex-wrap:wrap;
+    }
+    .msg{
+      margin: 12px 0 0;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.06);
+      color: var(--muted);
+      display:none;
+    }
+    .small{ font-size: 12px; color: var(--muted); }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="brand">
+        <div class="logo">EC</div>
+        <div>
+          <div class="title">Admin Panel</div>
+          <div class="subtitle">Users • Block/Unblock • Make Admin</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <a class="btn" href="/">🌍 Back to Globe</a>
+        <button class="btn primary" id="btnReload" type="button">🔄 Reload</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="cardHead">
+        <div class="row">
+          <span class="pill" id="stats">—</span>
+          <span class="pill" id="me">—</span>
+        </div>
+
+        <div class="row">
+          <input id="q" placeholder="Пошук: username / email" />
+        </div>
+      </div>
+
+      <div class="msg" id="msg"></div>
+
+      <div style="overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>User</th>
+              <th>Email</th>
+              <th>Coins</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tbody">
+            <tr><td colspan="7" class="small">Завантаження…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function showMsg(text, kind="info"){
+      const el = $("msg");
+      el.style.display = "block";
+      el.textContent = text;
+      el.style.borderColor =
+        kind === "good" ? "rgba(34,197,94,.35)" :
+        kind === "bad" ? "rgba(239,68,68,.35)" :
+        kind === "warn" ? "rgba(245,158,11,.35)" :
+        "rgba(255,255,255,.16)";
+    }
+
+    function fmtDate(iso){
+      if(!iso) return "—";
+      try{
+        const d = new Date(iso);
+        return d.toLocaleString(undefined, {year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit"});
+      }catch(e){ return iso; }
+    }
+
+    let ALL = [];
+
+    async function api(path, opts={}){
+      const res = await fetch(path, {
+        headers: {"Content-Type":"application/json"},
+        credentials: "same-origin",
+        ...opts
+      });
+      let data = null;
+      try{ data = await res.json(); } catch(e){}
+      if(!res.ok){
+        const msg = (data && data.error) ? data.error : ("HTTP " + res.status);
+        throw new Error(msg);
+      }
+      return data;
+    }
+
+    function render(){
+      const q = ($("q").value || "").trim().toLowerCase();
+      const rows = ALL.filter(u => {
+        if(!q) return true;
+        return (u.username||"").toLowerCase().includes(q) || (u.email||"").toLowerCase().includes(q);
+      });
+
+      $("stats").textContent = `Users: ${rows.length} / ${ALL.length}`;
+
+      const tb = $("tbody");
+      tb.innerHTML = "";
+
+      if(rows.length === 0){
+        tb.innerHTML = `<tr><td colspan="7" class="small">Нічого не знайдено.</td></tr>`;
+        return;
+      }
+
+      for(const u of rows){
+        const status = [];
+        status.push(u.is_confirmed ? `<span class="tag good">✅ confirmed</span>` : `<span class="tag warn">⏳ unconfirmed</span>`);
+        status.push(u.is_admin ? `<span class="tag good">🛡️ admin</span>` : `<span class="tag">user</span>`);
+        status.push(u.is_blocked ? `<span class="tag bad">⛔ blocked</span>` : `<span class="tag good">🟢 active</span>`);
+
+        const actions = [];
+        if(u.is_blocked){
+          actions.push(`<button class="btn good" data-act="unblock" data-id="${u.id}">✅ Unblock</button>`);
+        }else{
+          actions.push(`<button class="btn danger" data-act="block" data-id="${u.id}">⛔ Block</button>`);
+        }
+        if(!u.is_admin){
+          actions.push(`<button class="btn warn" data-act="makeadmin" data-id="${u.id}">🛡️ Make admin</button>`);
+        }
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="mono">${u.id}</td>
+          <td><b>${escapeHtml(u.username || "")}</b></td>
+          <td class="mono">${escapeHtml(u.email || "")}</td>
+          <td class="mono">${Number(u.coins||0)}</td>
+          <td>${status.join(" ")}</td>
+          <td class="mono">${fmtDate(u.created_at)}</td>
+          <td><div class="actions">${actions.join("")}</div></td>
+        `;
+        tb.appendChild(tr);
+      }
+    }
+
+    function escapeHtml(s){
+      return String(s)
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
+
+    async function loadMe(){
+      try{
+        const me = await api("/api/me");
+        $("me").textContent = me.authenticated ? `Me: ${me.username} (${me.email})` : "Me: Guest";
+      }catch(e){
+        $("me").textContent = "Me: —";
+      }
+    }
+
+    async function loadUsers(){
+      $("tbody").innerHTML = `<tr><td colspan="7" class="small">Завантаження…</td></tr>`;
+      try{
+        const data = await api("/api/admin/users");
+        ALL = data.data || [];
+        render();
+        showMsg("Готово ✅", "good");
+      }catch(e){
+        showMsg("Помилка: " + e.message, "bad");
+        $("tbody").innerHTML = `<tr><td colspan="7" class="small">Нема доступу або помилка завантаження.</td></tr>`;
+      }
+    }
+
+    async function doAction(act, id){
+      try{
+        if(act === "block"){
+          await api(`/api/admin/users/${id}/block`, {method:"POST"});
+          showMsg(`User #${id} blocked`, "warn");
+        }else if(act === "unblock"){
+          await api(`/api/admin/users/${id}/unblock`, {method:"POST"});
+          showMsg(`User #${id} unblocked`, "good");
+        }else if(act === "makeadmin"){
+          await api(`/api/admin/users/${id}/make-admin`, {method:"POST"});
+          showMsg(`User #${id} is now admin`, "good");
+        }
+        await loadUsers();
+      }catch(e){
+        showMsg("Помилка: " + e.message, "bad");
+      }
+    }
+
+    $("btnReload").addEventListener("click", () => loadUsers());
+    $("q").addEventListener("input", () => render());
+
+    document.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-act]");
+      if(!btn) return;
+      const act = btn.getAttribute("data-act");
+      const id = btn.getAttribute("data-id");
+      doAction(act, id);
+    });
+
+    loadMe();
+    loadUsers();
+  </script>
+</body>
+</html>

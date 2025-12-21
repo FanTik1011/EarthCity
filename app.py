@@ -9,6 +9,7 @@ import math
 import logging
 from datetime import datetime
 from urllib.parse import urljoin
+from functools import wraps
 
 from flask import Flask, render_template, request, url_for, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
@@ -21,14 +22,13 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-# NEW: load .env locally (Heroku ignores .env by default)
 from dotenv import load_dotenv
 
 
 # ---------------------------
 # Load env
 # ---------------------------
-load_dotenv()  # reads .env if exists
+load_dotenv()  # reads .env locally
 
 
 # ---------------------------
@@ -98,9 +98,8 @@ app.config["MAIL_DEFAULT_SENDER"] = os.getenv(
     app.config["MAIL_USERNAME"] or "no-reply@example.com"
 )
 
-# If you want to force a specific public base URL (optional)
-# Example: https://earthcity-xxxxx.herokuapp.com
-app.config["PUBLIC_BASE_URL"] = os.getenv("PUBLIC_BASE_URL", "").strip()
+# Optional fixed base url (best on prod)
+app.config["PUBLIC_BASE_URL"] = (os.getenv("PUBLIC_BASE_URL") or "").strip()
 
 
 # ---------------------------
@@ -237,14 +236,20 @@ class User(db.Model, UserMixin):
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(255), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
+
     is_confirmed = db.Column(db.Boolean, default=False, nullable=False)
     confirmed_at = db.Column(db.DateTime, nullable=True)
+
     coins = db.Column(db.Integer, default=START_COINS, nullable=False)
 
-    # NEW: starter bonus lock (so you can safely grant once for old/test accounts)
-    starter_granted = db.Column(db.Boolean, default=True, nullable=False)
+    # ✅ lock: False by default (for older/test accounts you may grant once)
+    starter_granted = db.Column(db.Boolean, default=False, nullable=False)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    is_admin = db.Column(db.Boolean, default=False, nullable=False)
+    is_blocked = db.Column(db.Boolean, default=False, nullable=False)
+    blocked_at = db.Column(db.DateTime, nullable=True)
 
 
 class Country(db.Model):
@@ -284,8 +289,8 @@ class Factory(db.Model):
     country_id = db.Column(db.Integer, db.ForeignKey("country.id"), nullable=False)
     owner_user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
 
-    blueprint = db.Column(db.String(60), nullable=False)     # key in FACTORY_BLUEPRINTS
-    name = db.Column(db.String(120), nullable=False)         # display name
+    blueprint = db.Column(db.String(60), nullable=False)
+    name = db.Column(db.String(120), nullable=False)
     icon = db.Column(db.String(16), nullable=False, default="🏭")
 
     lng = db.Column(db.Float, nullable=False)
@@ -295,7 +300,6 @@ class Factory(db.Model):
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
-    # money accrual
     stored_coins = db.Column(db.Integer, default=0, nullable=False)
     last_collected_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
@@ -341,12 +345,10 @@ def parse_confirm_token(token: str):
 
 
 def absolute_url(path: str) -> str:
-    # If user provided PUBLIC_BASE_URL, use it (best for stable hosting)
     base = (app.config.get("PUBLIC_BASE_URL") or "").rstrip("/")
     if base:
         return urljoin(base + "/", path.lstrip("/"))
 
-    # Otherwise compute from request (ProxyFix helps on Heroku)
     base2 = request.host_url
     if base2.startswith("http://"):
         base2 = base2.replace("http://", "https://", 1)
@@ -377,6 +379,68 @@ def send_confirmation_email(user: User) -> dict:
 
 
 # ---------------------------
+# Admin bootstrap
+# ---------------------------
+def ensure_admin_from_env():
+    username = (os.getenv("ADMIN_USERNAME") or "").strip()
+    email = (os.getenv("ADMIN_EMAIL") or "").strip().lower()
+    password = os.getenv("ADMIN_PASSWORD") or ""
+
+    if not username or not email or not password:
+        log.info("[ADMIN] ADMIN_USERNAME/ADMIN_EMAIL/ADMIN_PASSWORD not set — skipping admin bootstrap")
+        return
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        user = User(
+            username=username,
+            email=email,
+            password_hash=generate_password_hash(password),
+            is_confirmed=True,
+            confirmed_at=datetime.utcnow(),
+            is_admin=True,
+            is_blocked=False,
+            coins=START_COINS,
+            starter_granted=True
+        )
+        db.session.add(user)
+        db.session.commit()
+        log.info("[ADMIN] Created admin: %s", email)
+        return
+
+    changed = False
+    if user.username != username:
+        user.username = username
+        changed = True
+    if not user.is_admin:
+        user.is_admin = True
+        changed = True
+    if not user.is_confirmed:
+        user.is_confirmed = True
+        user.confirmed_at = datetime.utcnow()
+        changed = True
+
+    if changed:
+        db.session.commit()
+        log.info("[ADMIN] Updated admin flags for: %s", email)
+    else:
+        log.info("[ADMIN] Admin already ok: %s", email)
+
+
+def admin_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return jsonify(ok=False, error="Not authenticated"), 401
+        if getattr(current_user, "is_blocked", False):
+            return jsonify(ok=False, error="User is blocked"), 403
+        if not getattr(current_user, "is_admin", False):
+            return jsonify(ok=False, error="Admin only"), 403
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+# ---------------------------
 # Pages
 # ---------------------------
 @app.get("/")
@@ -390,6 +454,15 @@ def favicon():
     if os.path.exists(os.path.join(static_path, "favicon.ico")):
         return send_from_directory(static_path, "favicon.ico")
     return ("", 204)
+@app.get("/admin")
+@login_required
+def admin_page():
+    if getattr(current_user, "is_blocked", False):
+        return "Blocked", 403
+    if not getattr(current_user, "is_admin", False):
+        return "Admin only", 403
+    return render_template("admin.html")
+
 
 
 # ---------------------------
@@ -403,6 +476,8 @@ def api_me():
             username=None,
             email=None,
             is_confirmed=False,
+            is_admin=False,
+            is_blocked=False,
             coins=0,
             has_country=False,
             starter_granted=False
@@ -414,24 +489,25 @@ def api_me():
         username=current_user.username,
         email=current_user.email,
         is_confirmed=bool(current_user.is_confirmed),
+        is_admin=bool(getattr(current_user, "is_admin", False)),
+        is_blocked=bool(getattr(current_user, "is_blocked", False)),
         coins=int(current_user.coins or 0),
         has_country=bool(has_country),
-        starter_granted=bool(getattr(current_user, "starter_granted", True))
+        starter_granted=bool(getattr(current_user, "starter_granted", False))
     )
 
 
 @app.post("/api/me/grant_start_coins")
 @login_required
 def api_grant_start_coins():
-    """
-    Optional helper for old/test accounts.
-    Gives START_COINS only once per account.
-    """
-    # already locked
-    if bool(getattr(current_user, "starter_granted", True)):
+    # if blocked -> stop
+    if getattr(current_user, "is_blocked", False):
+        return jsonify(ok=False, error="User is blocked"), 403
+
+    if bool(getattr(current_user, "starter_granted", False)):
         return jsonify(ok=True, already=True, coins=int(current_user.coins or 0))
 
-    # anti-abuse: if user already has coins >0, we just lock without granting
+    # anti-abuse: if user already has coins >0, just lock
     if int(current_user.coins or 0) > 0:
         current_user.starter_granted = True
         db.session.commit()
@@ -470,7 +546,7 @@ def api_register():
         is_confirmed=False,
         confirmed_at=None,
         coins=START_COINS,
-        starter_granted=True  # ✅ lock as granted at registration
+        starter_granted=True  # ✅ at registration — lock as granted
     )
     db.session.add(user)
     db.session.commit()
@@ -491,16 +567,20 @@ def api_login():
     if not user or not check_password_hash(user.password_hash, password):
         return jsonify(ok=False, error="Невірний email або пароль."), 401
 
+    if getattr(user, "is_blocked", False):
+        return jsonify(ok=False, error="Твій акаунт заблокований адміністратором."), 403
+
     login_user(user)
 
     has_country = Country.query.filter_by(owner_user_id=user.id).first() is not None
     return jsonify(
         ok=True,
         is_confirmed=bool(user.is_confirmed),
+        is_admin=bool(getattr(user, "is_admin", False)),
         username=user.username,
         coins=int(user.coins or 0),
         has_country=bool(has_country),
-        starter_granted=bool(getattr(user, "starter_granted", True))
+        starter_granted=bool(getattr(user, "starter_granted", False))
     )
 
 
@@ -515,6 +595,8 @@ def api_logout():
 def api_resend_confirmation():
     if not current_user.is_authenticated:
         return jsonify(ok=False, error="Not authenticated"), 401
+    if getattr(current_user, "is_blocked", False):
+        return jsonify(ok=False, error="User is blocked"), 403
     if current_user.is_confirmed:
         return jsonify(ok=True, already=True, sent=True, dev_link=None, mail_error=None)
 
@@ -540,7 +622,11 @@ def confirm_email(token: str):
         user.confirmed_at = datetime.utcnow()
         db.session.commit()
 
-    return render_template("confirm_result.html", ok=True, msg="Email підтверджено ✅ Повернись на вкладку з глобусом і зроби Login (або перезавантаж сторінку).")
+    return render_template(
+        "confirm_result.html",
+        ok=True,
+        msg="Email підтверджено ✅ Повернись на вкладку з глобусом і зроби Login (або перезавантаж сторінку)."
+    )
 
 
 # ---------------------------
@@ -633,6 +719,8 @@ def _validate_polygon(geom: dict):
 def api_countries_create():
     if not current_user.is_authenticated:
         return jsonify(ok=False, error="Not authenticated"), 401
+    if getattr(current_user, "is_blocked", False):
+        return jsonify(ok=False, error="User is blocked"), 403
     if not current_user.is_confirmed:
         return jsonify(ok=False, error="Email not confirmed"), 403
 
@@ -679,9 +767,6 @@ def api_countries_create():
 
 @app.get("/api/countries/<int:cid>")
 def api_country_details(cid: int):
-    """
-    Used by your country panel in map.js
-    """
     c = db.session.get(Country, cid)
     if not c:
         return jsonify(ok=False, error="Country not found"), 404
@@ -715,34 +800,20 @@ def _country_polygon_ring(country: Country):
 
 
 def _resources_near_point_in_country(country: Country, lng: float, lat: float):
-    """
-    Returns resource nodes that are:
-    - inside the country polygon
-    - within FACTORY_PICK_RADIUS_KM from (lng, lat)
-    """
     ring = _country_polygon_ring(country)
     if not ring:
         return []
 
     near = []
     for n in RESOURCE_NODES:
-        # must be inside polygon
         if not point_in_polygon(n["lng"], n["lat"], ring):
             continue
-        # must be near the build point
         if haversine_km(lng, lat, n["lng"], n["lat"]) <= FACTORY_PICK_RADIUS_KM:
             near.append(n)
     return near
 
 
 def _calc_factory_rate_per_hour(factory: Factory) -> float:
-    """
-    Rate depends on blueprint base income and local resource strength.
-    Simple and cool:
-      effective_strength = avg strength of required resource types near factory (0..1)
-      multiplier = 0.75 + 0.65*effective_strength  (range ~0.75..1.40)
-      level multiplier = 1 + (level-1)*0.22
-    """
     bp = FACTORY_BLUEPRINTS.get(factory.blueprint)
     if not bp:
         return 0.0
@@ -778,7 +849,6 @@ def _accrue_factory(factory: Factory, now: datetime):
     if dt_hours <= 0:
         return
 
-    # cap offline
     dt_hours = min(dt_hours, FACTORY_ACCUM_CAP_HOURS)
 
     rate = _calc_factory_rate_per_hour(factory)
@@ -790,9 +860,6 @@ def _accrue_factory(factory: Factory, now: datetime):
 
 @app.get("/api/factories")
 def api_factories_list():
-    """
-    Returns all factories as GeoJSON for map markers (public).
-    """
     items = Factory.query.order_by(Factory.created_at.asc()).all()
     fc = {"type": "FeatureCollection", "features": [f.to_feature() for f in items]}
     return jsonify(ok=True, data=fc)
@@ -801,9 +868,9 @@ def api_factories_list():
 @app.get("/api/my/factories")
 @login_required
 def api_my_factories():
-    """
-    Returns my factories with accrual preview.
-    """
+    if getattr(current_user, "is_blocked", False):
+        return jsonify(ok=False, error="User is blocked"), 403
+
     now = datetime.utcnow()
     items = Factory.query.filter_by(owner_user_id=current_user.id).all()
     out = []
@@ -828,10 +895,8 @@ def api_my_factories():
 @app.post("/api/factories")
 @login_required
 def api_factory_build():
-    """
-    Build a factory at a map point.
-    Body: { country_id, blueprint, lng, lat }
-    """
+    if getattr(current_user, "is_blocked", False):
+        return jsonify(ok=False, error="User is blocked"), 403
     if not current_user.is_confirmed:
         return jsonify(ok=False, error="Email not confirmed"), 403
 
@@ -856,7 +921,6 @@ def api_factory_build():
     if country.owner_user_id != current_user.id:
         return jsonify(ok=False, error="Not your country"), 403
 
-    # limit factories per country
     cnt = Factory.query.filter_by(country_id=country.id).count()
     if cnt >= FACTORY_MAX_PER_COUNTRY:
         return jsonify(ok=False, error=f"Factory limit reached (max {FACTORY_MAX_PER_COUNTRY})"), 400
@@ -871,8 +935,6 @@ def api_factory_build():
     if int(current_user.coins or 0) < total_cost:
         return jsonify(ok=False, error=f"Недостатньо монет. Треба {total_cost} EC."), 400
 
-    # Resource requirements:
-    # You must have required resource nodes inside country and within radius of building point.
     near = _resources_near_point_in_country(country, float(lng), float(lat))
     req = bp.get("requires", {})
     missing = []
@@ -888,7 +950,6 @@ def api_factory_build():
     if missing:
         return jsonify(ok=False, error=f"Нема потрібних ресурсів поруч: {', '.join(missing)} (радіус {FACTORY_PICK_RADIUS_KM} км)."), 400
 
-    # charge
     current_user.coins = int(current_user.coins or 0) - total_cost
 
     f = Factory(
@@ -912,6 +973,9 @@ def api_factory_build():
 @app.post("/api/factories/<int:fid>/collect")
 @login_required
 def api_factory_collect(fid: int):
+    if getattr(current_user, "is_blocked", False):
+        return jsonify(ok=False, error="User is blocked"), 403
+
     f = db.session.get(Factory, fid)
     if not f:
         return jsonify(ok=False, error="Factory not found"), 404
@@ -936,18 +1000,18 @@ def api_factory_collect(fid: int):
 @app.post("/api/factories/<int:fid>/upgrade")
 @login_required
 def api_factory_upgrade(fid: int):
+    if getattr(current_user, "is_blocked", False):
+        return jsonify(ok=False, error="User is blocked"), 403
+
     f = db.session.get(Factory, fid)
     if not f:
         return jsonify(ok=False, error="Factory not found"), 404
     if f.owner_user_id != current_user.id:
         return jsonify(ok=False, error="Not yours"), 403
 
-    # accrue first so you don't lose time
     now = datetime.utcnow()
     _accrue_factory(f, now)
 
-    # Upgrade cost scales
-    # Lv2 = 350, Lv3=520, Lv4=760...
     next_lvl = int(f.level or 1) + 1
     cost = int(260 * (next_lvl ** 1.55))
 
@@ -962,10 +1026,71 @@ def api_factory_upgrade(fid: int):
 
 
 # ---------------------------
-# Init DB once per dyno boot
+# Admin API
+# ---------------------------
+@app.get("/api/admin/users")
+@admin_required
+def admin_users_list():
+    users = User.query.order_by(User.created_at.desc()).all()
+    return jsonify(ok=True, data=[{
+        "id": u.id,
+        "username": u.username,
+        "email": u.email,
+        "coins": int(u.coins or 0),
+        "is_confirmed": bool(u.is_confirmed),
+        "is_admin": bool(u.is_admin),
+        "is_blocked": bool(u.is_blocked),
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+        "confirmed_at": u.confirmed_at.isoformat() if u.confirmed_at else None,
+        "blocked_at": u.blocked_at.isoformat() if u.blocked_at else None,
+    } for u in users])
+
+
+@app.post("/api/admin/users/<int:uid>/block")
+@admin_required
+def admin_user_block(uid: int):
+    u = db.session.get(User, uid)
+    if not u:
+        return jsonify(ok=False, error="User not found"), 404
+    if u.id == current_user.id:
+        return jsonify(ok=False, error="You cannot block yourself"), 400
+
+    u.is_blocked = True
+    u.blocked_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(ok=True)
+
+
+@app.post("/api/admin/users/<int:uid>/unblock")
+@admin_required
+def admin_user_unblock(uid: int):
+    u = db.session.get(User, uid)
+    if not u:
+        return jsonify(ok=False, error="User not found"), 404
+
+    u.is_blocked = False
+    u.blocked_at = None
+    db.session.commit()
+    return jsonify(ok=True)
+
+
+@app.post("/api/admin/users/<int:uid>/make-admin")
+@admin_required
+def admin_make_admin(uid: int):
+    u = db.session.get(User, uid)
+    if not u:
+        return jsonify(ok=False, error="User not found"), 404
+    u.is_admin = True
+    db.session.commit()
+    return jsonify(ok=True)
+
+
+# ---------------------------
+# Init DB + bootstrap admin (works on Heroku gunicorn too)
 # ---------------------------
 with app.app_context():
     db.create_all()
+    ensure_admin_from_env()
 
 
 if __name__ == "__main__":
