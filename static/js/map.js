@@ -1160,6 +1160,10 @@
 
   if (btnOpenFactories) {
     btnOpenFactories.addEventListener("click", toggleFactoriesPanel);
+  
+
+    try { factorybar.setAttribute("aria-hidden", factoriesPanelOpen ? "false" : "true"); } catch (e) {}
+
   }
 
   // ---------- COUNTRY PANEL ----------
@@ -1272,10 +1276,9 @@
   setFactoriesPanel(false);
   const fbClose = document.getElementById("fbClose");
 
-  if (fbClose && factorybar) {
+  if (fbClose) {
     fbClose.addEventListener("click", () => {
-      factorybar.classList.remove("open");
-      // setMode("explore"); // optional
+      setFactoriesPanel(false);
     });
   }
   
