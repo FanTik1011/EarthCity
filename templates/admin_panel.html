@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>EarthCity — Admin Panel</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    :root{
+      --bg:#0b1020;
+      --panel: rgba(255,255,255,.06);
+      --panel2: rgba(255,255,255,.08);
+      --border: rgba(255,255,255,.10);
+      --text:#eaf0ff;
+      --muted: rgba(234,240,255,.72);
+      --good:#22c55e;
+      --bad:#ef4444;
+      --warn:#f59e0b;
+      --accent:#7c3aed;
+      --shadow: 0 18px 50px rgba(0,0,0,.45);
+      --radius: 18px;
+    }
+
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background:
+        radial-gradient(1200px 700px at 15% 10%, rgba(124,58,237,.25), transparent 60%),
+        radial-gradient(900px 600px at 85% 20%, rgba(34,197,94,.18), transparent 55%),
+        radial-gradient(800px 500px at 50% 90%, rgba(245,158,11,.14), transparent 60%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .wrap{
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 22px 16px 40px;
+    }
+
+    .top{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      padding: 18px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px);
+    }
+
+    .title{
+      display:flex;
+      flex-direction:column;
+      gap:4px;
+    }
+    .title h1{
+      margin:0;
+      font-size: 20px;
+      letter-spacing: .2px;
+    }
+    .title p{
+      margin:0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .actions{
+      display:flex;
+      gap:10px;
+      flex-wrap: wrap;
+      justify-content:flex-end;
+    }
+
+    .btn{
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.08);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 12px;
+      cursor:pointer;
+      font-weight:600;
+      font-size: 13px;
+      transition: .15s ease;
+      text-decoration:none;
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      user-select:none;
+    }
+    .btn:hover{ transform: translateY(-1px); background: rgba(255,255,255,.11); }
+    .btn.primary{ background: rgba(124,58,237,.22); border-color: rgba(124,58,237,.45); }
+    .btn.danger{ background: rgba(239,68,68,.18); border-color: rgba(239,68,68,.35); }
+    .btn.good{ background: rgba(34,197,94,.16); border-color: rgba(34,197,94,.35); }
+    .btn.ghost{ background: transparent; }
+
+    .grid{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .card{
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px);
+      overflow:hidden;
+    }
+    .cardHead{
+      padding: 14px 14px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,.04);
+    }
+    .cardHead strong{ font-size: 14px; }
+    .cardHead .right{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+      align-items:center;
+    }
+
+    .input{
+      background: rgba(255,255,255,.06);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 12px;
+      outline:none;
+      min-width: 240px;
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .input::placeholder{ color: rgba(234,240,255,.45); font-weight:600; }
+
+    table{
+      width:100%;
+      border-collapse:collapse;
+    }
+    th, td{
+      padding: 12px 10px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      text-align:left;
+      vertical-align: middle;
+      font-size: 13px;
+    }
+    th{
+      color: rgba(234,240,255,.78);
+      font-weight:800;
+      font-size: 12px;
+      letter-spacing: .3px;
+      text-transform: uppercase;
+      background: rgba(255,255,255,.03);
+    }
+
+    .tag{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      font-weight:800;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .tag.good{ border-color: rgba(34,197,94,.45); background: rgba(34,197,94,.12); }
+    .tag.bad{ border-color: rgba(239,68,68,.45); background: rgba(239,68,68,.12); }
+    .tag.warn{ border-color: rgba(245,158,11,.45); background: rgba(245,158,11,.12); }
+
+    .rowActions{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+
+    .mini{
+      padding: 8px 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight:800;
+    }
+
+    .footerNote{
+      padding: 12px 14px;
+      color: rgba(234,240,255,.58);
+      font-size: 12px;
+    }
+
+    /* modal */
+    .overlay{
+      position:fixed; inset:0;
+      background: rgba(0,0,0,.6);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      padding: 18px;
+      z-index: 50;
+    }
+    .modal{
+      width: min(520px, 100%);
+      background: rgba(15,18,30,.92);
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 18px;
+      box-shadow: 0 30px 80px rgba(0,0,0,.6);
+      overflow:hidden;
+    }
+    .modalHead{
+      padding: 14px;
+      border-bottom: 1px solid rgba(255,255,255,.12);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+    }
+    .modalHead strong{ font-size: 14px; }
+    .modalBody{ padding: 14px; display:flex; flex-direction:column; gap:12px; }
+    .modalBody label{ font-size: 12px; color: rgba(234,240,255,.75); font-weight:800; text-transform:uppercase; letter-spacing:.3px;}
+    .modalFoot{
+      padding: 14px;
+      border-top: 1px solid rgba(255,255,255,.12);
+      display:flex;
+      justify-content:flex-end;
+      gap:10px;
+      flex-wrap: wrap;
+    }
+
+    .toast{
+      position: fixed;
+      right: 14px;
+      bottom: 14px;
+      background: rgba(15,18,30,.92);
+      border: 1px solid rgba(255,255,255,.12);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 14px;
+      box-shadow: 0 18px 50px rgba(0,0,0,.45);
+      display:none;
+      max-width: min(520px, 92vw);
+      font-weight:700;
+      font-size: 13px;
+      z-index: 60;
+    }
+
+    @media (max-width: 720px){
+      .input{ min-width: 0; width: 100%; }
+      .cardHead{ flex-direction:column; align-items:flex-start; }
+      .cardHead .right{ width:100%; }
+      th:nth-child(5), td:nth-child(5),
+      th:nth-child(6), td:nth-child(6){
+        display:none;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="title">
+        <h1>🛡️ EarthCity Admin Panel</h1>
+        <p id="meLine">Завантаження...</p>
+      </div>
+      <div class="actions">
+        <a class="btn ghost" href="/">🌍 На глобус</a>
+        <button class="btn primary" id="btnReload">🔄 Оновити</button>
+        <button class="btn" id="btnLogout">🚪 Logout</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="cardHead">
+          <strong>👥 Користувачі</strong>
+          <div class="right">
+            <input id="q" class="input" placeholder="Пошук: username або email..." />
+          </div>
+        </div>
+
+        <div style="overflow:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Юзер</th>
+                <th>Email</th>
+                <th>Coins</th>
+                <th>Confirm</th>
+                <th>Created</th>
+                <th>Status</th>
+                <th>Дії</th>
+              </tr>
+            </thead>
+            <tbody id="tbody">
+              <tr><td colspan="8" style="color: rgba(234,240,255,.75); padding: 16px;">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="footerNote">
+          Порада: Block одразу розлогінює заблокованого (при наступному запиті).
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Block modal -->
+  <div class="overlay" id="blockOverlay">
+    <div class="modal">
+      <div class="modalHead">
+        <strong>⛔ Заблокувати користувача</strong>
+        <button class="btn mini" id="btnBlockClose">✖</button>
+      </div>
+      <div class="modalBody">
+        <div style="color: rgba(234,240,255,.82); font-weight:800;" id="blockUserLine">user</div>
+        <label>Причина</label>
+        <input class="input" id="blockReason" placeholder="Напр. спам/абуз/мультиакаунт..." />
+      </div>
+      <div class="modalFoot">
+        <button class="btn" id="btnBlockCancel">Скасувати</button>
+        <button class="btn danger" id="btnBlockConfirm">Заблокувати</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Coins modal -->
+  <div class="overlay" id="coinsOverlay">
+    <div class="modal">
+      <div class="modalHead">
+        <strong>💰 Видати монети</strong>
+        <button class="btn mini" id="btnCoinsClose">✖</button>
+      </div>
+      <div class="modalBody">
+        <div style="color: rgba(234,240,255,.82); font-weight:800;" id="coinsUserLine">user</div>
+        <label>Сума (можна відʼємну)</label>
+        <input class="input" id="coinsAmount" type="number" step="1" value="1000" />
+        <div style="color: rgba(234,240,255,.62); font-size: 12px; font-weight:700;">
+          Ліміт: ±1,000,000 за одну дію.
+        </div>
+      </div>
+      <div class="modalFoot">
+        <button class="btn" id="btnCoinsCancel">Скасувати</button>
+        <button class="btn good" id="btnCoinsConfirm">Застосувати</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  const tbody = $("tbody");
+  const q = $("q");
+  const btnReload = $("btnReload");
+  const btnLogout = $("btnLogout");
+  const meLine = $("meLine");
+
+  const blockOverlay = $("blockOverlay");
+  const blockUserLine = $("blockUserLine");
+  const blockReason = $("blockReason");
+  const btnBlockClose = $("btnBlockClose");
+  const btnBlockCancel = $("btnBlockCancel");
+  const btnBlockConfirm = $("btnBlockConfirm");
+
+  const coinsOverlay = $("coinsOverlay");
+  const coinsUserLine = $("coinsUserLine");
+  const coinsAmount = $("coinsAmount");
+  const btnCoinsClose = $("btnCoinsClose");
+  const btnCoinsCancel = $("btnCoinsCancel");
+  const btnCoinsConfirm = $("btnCoinsConfirm");
+
+  const toast = $("toast");
+
+  let ALL_USERS = [];
+  let currentActionUserId = null;
+
+  function showToast(msg){
+    toast.textContent = msg;
+    toast.style.display = "block";
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(()=> toast.style.display="none", 2600);
+  }
+
+  async function api(url, options={}){
+    const res = await fetch(url, {
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", ...(options.headers||{}) },
+      ...options
+    });
+    const data = await res.json().catch(()=> ({}));
+    if (!res.ok || data.ok === false){
+      const err = data.error || ("HTTP " + res.status);
+      throw new Error(err);
+    }
+    return data;
+  }
+
+  function fmtDate(iso){
+    if(!iso) return "-";
+    try{
+      const d = new Date(iso);
+      return d.toLocaleString("uk-UA", {year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit"});
+    }catch{
+      return iso;
+    }
+  }
+
+  function tagHTML(text, cls){
+    return `<span class="tag ${cls}">${text}</span>`;
+  }
+
+  function render(list){
+    if(!list.length){
+      tbody.innerHTML = `<tr><td colspan="8" style="padding:16px; color: rgba(234,240,255,.7);">Нічого не знайдено.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = list.map(u=>{
+      const status = u.is_admin
+        ? tagHTML("ADMIN", "warn")
+        : (u.is_blocked ? tagHTML("BLOCKED", "bad") : tagHTML("ACTIVE", "good"));
+
+      const confirmed = u.is_confirmed ? tagHTML("YES", "good") : tagHTML("NO", "bad");
+
+      const blockHint = u.is_blocked
+        ? (u.blocked_reason ? `Причина: ${u.blocked_reason}` : "Blocked")
+        : "";
+
+      const actions = `
+        <div class="rowActions">
+          ${u.is_blocked
+            ? `<button class="btn mini good" data-act="unblock" data-id="${u.id}">✅ Unblock</button>`
+            : `<button class="btn mini danger" data-act="block" data-id="${u.id}">⛔ Block</button>`
+          }
+          <button class="btn mini primary" data-act="coins" data-id="${u.id}">💰 Coins</button>
+        </div>
+      `;
+
+      return `
+        <tr title="${blockHint}">
+          <td>${u.id}</td>
+          <td style="font-weight:800;">${escapeHTML(u.username || "")}</td>
+          <td style="color: rgba(234,240,255,.78);">${escapeHTML(u.email || "")}</td>
+          <td style="font-weight:900;">${Number(u.coins || 0).toLocaleString("uk-UA")}</td>
+          <td>${confirmed}</td>
+          <td>${fmtDate(u.created_at)}</td>
+          <td>${status}</td>
+          <td>${actions}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  function escapeHTML(s){
+    return (s||"")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+
+  function applyFilter(){
+    const v = (q.value || "").trim().toLowerCase();
+    if(!v){
+      render(ALL_USERS);
+      return;
+    }
+    const f = ALL_USERS.filter(u =>
+      (u.username||"").toLowerCase().includes(v) ||
+      (u.email||"").toLowerCase().includes(v)
+    );
+    render(f);
+  }
+
+  async function loadMe(){
+    const me = await api("/api/me");
+    if(!me.authenticated){
+      meLine.textContent = "Не авторизовано.";
+      return;
+    }
+    meLine.textContent = `Ти: ${me.username} (${me.email}) • coins: ${Number(me.coins||0).toLocaleString("uk-UA")}`;
+  }
+
+  async function loadUsers(){
+    tbody.innerHTML = `<tr><td colspan="8" style="padding:16px; color: rgba(234,240,255,.7);">Loading...</td></tr>`;
+    const data = await api("/admin/api/users");
+    ALL_USERS = data.data || [];
+    applyFilter();
+  }
+
+  function openBlock(uid){
+    const u = ALL_USERS.find(x => x.id === uid);
+    if(!u) return;
+    currentActionUserId = uid;
+    blockUserLine.textContent = `#${u.id} • ${u.username} • ${u.email}`;
+    blockReason.value = "";
+    blockOverlay.style.display = "flex";
+    setTimeout(()=> blockReason.focus(), 50);
+  }
+  function closeBlock(){ blockOverlay.style.display = "none"; currentActionUserId = null; }
+
+  function openCoins(uid){
+    const u = ALL_USERS.find(x => x.id === uid);
+    if(!u) return;
+    currentActionUserId = uid;
+    coinsUserLine.textContent = `#${u.id} • ${u.username} • ${u.email}`;
+    coinsAmount.value = 1000;
+    coinsOverlay.style.display = "flex";
+    setTimeout(()=> coinsAmount.focus(), 50);
+  }
+  function closeCoins(){ coinsOverlay.style.display = "none"; currentActionUserId = null; }
+
+  tbody.addEventListener("click", async (e)=>{
+    const btn = e.target.closest("button[data-act]");
+    if(!btn) return;
+    const act = btn.dataset.act;
+    const uid = Number(btn.dataset.id);
+
+    try{
+      if(act === "block") openBlock(uid);
+      else if(act === "unblock"){
+        await api(`/admin/api/users/${uid}/unblock`, { method:"POST", body: "{}" });
+        showToast("Unblocked ✅");
+        await loadUsers();
+      }
+      else if(act === "coins") openCoins(uid);
+    }catch(err){
+      showToast("Помилка: " + err.message);
+    }
+  });
+
+  btnBlockClose.onclick = closeBlock;
+  btnBlockCancel.onclick = closeBlock;
+  blockOverlay.addEventListener("click", (e)=>{ if(e.target === blockOverlay) closeBlock(); });
+  btnBlockConfirm.onclick = async ()=>{
+    try{
+      const uid = currentActionUserId;
+      const reason = (blockReason.value || "").trim() || "Blocked by admin";
+      await api(`/admin/api/users/${uid}/block`, { method:"POST", body: JSON.stringify({reason}) });
+      showToast("Blocked ⛔");
+      closeBlock();
+      await loadUsers();
+    }catch(err){
+      showToast("Помилка: " + err.message);
+    }
+  };
+
+  btnCoinsClose.onclick = closeCoins;
+  btnCoinsCancel.onclick = closeCoins;
+  coinsOverlay.addEventListener("click", (e)=>{ if(e.target === coinsOverlay) closeCoins(); });
+  btnCoinsConfirm.onclick = async ()=>{
+    try{
+      const uid = currentActionUserId;
+      const amount = Number(coinsAmount.value || 0);
+      await api(`/admin/api/users/${uid}/give_coins`, { method:"POST", body: JSON.stringify({amount}) });
+      showToast("Coins updated 💰");
+      closeCoins();
+      await loadUsers();
+    }catch(err){
+      showToast("Помилка: " + err.message);
+    }
+  };
+
+  btnReload.onclick = async ()=> {
+    try{
+      await loadMe();
+      await loadUsers();
+      showToast("Оновлено ✅");
+    }catch(err){
+      showToast("Помилка: " + err.message);
+    }
+  };
+
+  btnLogout.onclick = async ()=>{
+    try{
+      await api("/api/logout", { method:"POST", body:"{}" });
+      location.href = "/";
+    }catch(err){
+      showToast("Помилка: " + err.message);
+    }
+  };
+
+  q.addEventListener("input", applyFilter);
+
+  (async ()=>{
+    try{
+      await loadMe();
+      await loadUsers();
+    }catch(err){
+      showToast("Помилка: " + err.message);
+    }
+  })();
+</script>
+</body>
+</html>

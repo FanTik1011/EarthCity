@@ -9,6 +9,7 @@ import math
 import logging
 from datetime import datetime
 from urllib.parse import urljoin
+from functools import wraps
 
 from flask import Flask, render_template, request, url_for, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
@@ -20,6 +21,7 @@ from flask_mail import Mail, Message
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
+from sqlalchemy import text as sa_text
 
 # NEW: load .env locally (Heroku ignores .env by default)
 from dotenv import load_dotenv
@@ -29,6 +31,14 @@ from dotenv import load_dotenv
 # Load env
 # ---------------------------
 load_dotenv()  # reads .env if exists
+
+
+# ---------------------------
+# HARD-CODE ADMIN (email only)
+# ---------------------------
+HARDCODE_ADMIN_EMAILS = {
+    "volodakotlarov191@gmail.com",
+}
 
 
 # ---------------------------
@@ -113,6 +123,21 @@ login_manager = LoginManager(app)
 login_manager.login_view = None
 
 
+def auto_promote_admin(user):
+    """
+    Make user admin automatically if their email is in HARDCODE_ADMIN_EMAILS.
+    Safe: affects only your email(s).
+    """
+    try:
+        if not user or not getattr(user, "email", None):
+            return
+        if user.email.strip().lower() in HARDCODE_ADMIN_EMAILS and not getattr(user, "is_admin", False):
+            user.is_admin = True
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
 # ---------------------------
 # GEO helpers
 # ---------------------------
@@ -175,7 +200,7 @@ def compute_country_cost(area_km2: float) -> int:
 
 
 # ---------------------------
-# Resources & Blueprints (keep as-is)
+# Resources & Blueprints
 # ---------------------------
 RESOURCE_NODES = [
     {"type": "oil", "name": "Oil Basin", "lng": 50.5, "lat": 24.0, "strength": 0.95},
@@ -241,8 +266,14 @@ class User(db.Model, UserMixin):
     confirmed_at = db.Column(db.DateTime, nullable=True)
     coins = db.Column(db.Integer, default=START_COINS, nullable=False)
 
-    # NEW: starter bonus lock (so you can safely grant once for old/test accounts)
+    # starter bonus lock
     starter_granted = db.Column(db.Boolean, default=True, nullable=False)
+
+    # Admin / Block
+    is_admin = db.Column(db.Boolean, default=False, nullable=False)
+    is_blocked = db.Column(db.Boolean, default=False, nullable=False)
+    blocked_reason = db.Column(db.String(255), nullable=True)
+    blocked_at = db.Column(db.DateTime, nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
@@ -284,18 +315,16 @@ class Factory(db.Model):
     country_id = db.Column(db.Integer, db.ForeignKey("country.id"), nullable=False)
     owner_user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
 
-    blueprint = db.Column(db.String(60), nullable=False)     # key in FACTORY_BLUEPRINTS
-    name = db.Column(db.String(120), nullable=False)         # display name
+    blueprint = db.Column(db.String(60), nullable=False)
+    name = db.Column(db.String(120), nullable=False)
     icon = db.Column(db.String(16), nullable=False, default="🏭")
 
     lng = db.Column(db.Float, nullable=False)
     lat = db.Column(db.Float, nullable=False)
 
     level = db.Column(db.Integer, nullable=False, default=1)
-
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
-    # money accrual
     stored_coins = db.Column(db.Integer, default=0, nullable=False)
     last_collected_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
@@ -326,6 +355,31 @@ def load_user(user_id: str):
 
 
 # ---------------------------
+# Admin helpers
+# ---------------------------
+def admin_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return jsonify(ok=False, error="Not authenticated"), 401
+        if getattr(current_user, "is_blocked", False):
+            logout_user()
+            return jsonify(ok=False, error="Blocked"), 403
+        if not getattr(current_user, "is_admin", False):
+            return jsonify(ok=False, error="Admin only"), 403
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+@app.before_request
+def _kick_blocked_users():
+    if current_user.is_authenticated and getattr(current_user, "is_blocked", False):
+        logout_user()
+        if request.path.startswith("/api/") or request.path.startswith("/admin/api/"):
+            return jsonify(ok=False, error="Blocked"), 403
+
+
+# ---------------------------
 # Email tokens + URL helpers
 # ---------------------------
 def _serializer() -> URLSafeTimedSerializer:
@@ -341,12 +395,10 @@ def parse_confirm_token(token: str):
 
 
 def absolute_url(path: str) -> str:
-    # If user provided PUBLIC_BASE_URL, use it (best for stable hosting)
     base = (app.config.get("PUBLIC_BASE_URL") or "").rstrip("/")
     if base:
         return urljoin(base + "/", path.lstrip("/"))
 
-    # Otherwise compute from request (ProxyFix helps on Heroku)
     base2 = request.host_url
     if base2.startswith("http://"):
         base2 = base2.replace("http://", "https://", 1)
@@ -384,6 +436,14 @@ def globe_page():
     return render_template("globe_auth.html")
 
 
+@app.get("/admin")
+@login_required
+def admin_page():
+    if not getattr(current_user, "is_admin", False):
+        return ("Forbidden", 403)
+    return render_template("admin_panel.html")
+
+
 @app.get("/favicon.ico")
 def favicon():
     static_path = os.path.join(app.root_path, "static")
@@ -405,7 +465,9 @@ def api_me():
             is_confirmed=False,
             coins=0,
             has_country=False,
-            starter_granted=False
+            starter_granted=False,
+            is_admin=False,
+            is_blocked=False
         )
 
     has_country = Country.query.filter_by(owner_user_id=current_user.id).first() is not None
@@ -416,22 +478,18 @@ def api_me():
         is_confirmed=bool(current_user.is_confirmed),
         coins=int(current_user.coins or 0),
         has_country=bool(has_country),
-        starter_granted=bool(getattr(current_user, "starter_granted", True))
+        starter_granted=bool(getattr(current_user, "starter_granted", True)),
+        is_admin=bool(getattr(current_user, "is_admin", False)),
+        is_blocked=bool(getattr(current_user, "is_blocked", False))
     )
 
 
 @app.post("/api/me/grant_start_coins")
 @login_required
 def api_grant_start_coins():
-    """
-    Optional helper for old/test accounts.
-    Gives START_COINS only once per account.
-    """
-    # already locked
     if bool(getattr(current_user, "starter_granted", True)):
         return jsonify(ok=True, already=True, coins=int(current_user.coins or 0))
 
-    # anti-abuse: if user already has coins >0, we just lock without granting
     if int(current_user.coins or 0) > 0:
         current_user.starter_granted = True
         db.session.commit()
@@ -469,11 +527,14 @@ def api_register():
         password_hash=generate_password_hash(password),
         is_confirmed=False,
         confirmed_at=None,
-        coins=START_COINS,
-        starter_granted=True  # ✅ lock as granted at registration
+        coins=START_COINS,      # ✅ everyone gets 5000 (default)
+        starter_granted=True
     )
     db.session.add(user)
     db.session.commit()
+
+    # ✅ AUTO ADMIN for your email
+    auto_promote_admin(user)
 
     login_user(user)
 
@@ -491,7 +552,13 @@ def api_login():
     if not user or not check_password_hash(user.password_hash, password):
         return jsonify(ok=False, error="Невірний email або пароль."), 401
 
+    if getattr(user, "is_blocked", False):
+        return jsonify(ok=False, error="Акаунт заблоковано адміністратором."), 403
+
     login_user(user)
+
+    # ✅ AUTO ADMIN for your email
+    auto_promote_admin(user)
 
     has_country = Country.query.filter_by(owner_user_id=user.id).first() is not None
     return jsonify(
@@ -500,7 +567,9 @@ def api_login():
         username=user.username,
         coins=int(user.coins or 0),
         has_country=bool(has_country),
-        starter_granted=bool(getattr(user, "starter_granted", True))
+        starter_granted=bool(getattr(user, "starter_granted", True)),
+        is_admin=bool(getattr(user, "is_admin", False)),
+        is_blocked=bool(getattr(user, "is_blocked", False))
     )
 
 
@@ -540,7 +609,93 @@ def confirm_email(token: str):
         user.confirmed_at = datetime.utcnow()
         db.session.commit()
 
-    return render_template("confirm_result.html", ok=True, msg="Email підтверджено ✅ Повернись на вкладку з глобусом і зроби Login (або перезавантаж сторінку).")
+    return render_template(
+        "confirm_result.html",
+        ok=True,
+        msg="Email підтверджено ✅ Повернись на вкладку з глобусом і зроби Login (або перезавантаж сторінку)."
+    )
+
+
+# ---------------------------
+# Admin API
+# ---------------------------
+@app.get("/admin/api/users")
+@admin_required
+def admin_api_users():
+    users = User.query.order_by(User.created_at.desc()).all()
+    out = []
+    for u in users:
+        out.append({
+            "id": u.id,
+            "username": u.username,
+            "email": u.email,
+            "coins": int(u.coins or 0),
+            "is_confirmed": bool(u.is_confirmed),
+            "is_admin": bool(getattr(u, "is_admin", False)),
+            "is_blocked": bool(getattr(u, "is_blocked", False)),
+            "blocked_reason": u.blocked_reason,
+            "blocked_at": u.blocked_at.isoformat() if u.blocked_at else None,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+        })
+    return jsonify(ok=True, data=out)
+
+
+@app.post("/admin/api/users/<int:uid>/block")
+@admin_required
+def admin_api_block(uid: int):
+    data = request.get_json(force=True, silent=True) or {}
+    reason = (data.get("reason") or "Blocked by admin").strip()[:255]
+
+    u = db.session.get(User, uid)
+    if not u:
+        return jsonify(ok=False, error="User not found"), 404
+    if u.id == current_user.id:
+        return jsonify(ok=False, error="You cannot block yourself"), 400
+    if getattr(u, "is_admin", False):
+        return jsonify(ok=False, error="You cannot block another admin"), 400
+
+    u.is_blocked = True
+    u.blocked_reason = reason
+    u.blocked_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(ok=True)
+
+
+@app.post("/admin/api/users/<int:uid>/unblock")
+@admin_required
+def admin_api_unblock(uid: int):
+    u = db.session.get(User, uid)
+    if not u:
+        return jsonify(ok=False, error="User not found"), 404
+
+    u.is_blocked = False
+    u.blocked_reason = None
+    u.blocked_at = None
+    db.session.commit()
+    return jsonify(ok=True)
+
+
+@app.post("/admin/api/users/<int:uid>/give_coins")
+@admin_required
+def admin_api_give_coins(uid: int):
+    data = request.get_json(force=True, silent=True) or {}
+    amount = int(data.get("amount") or 0)
+
+    if amount == 0:
+        return jsonify(ok=False, error="amount required"), 400
+    if amount < -1_000_000 or amount > 1_000_000:
+        return jsonify(ok=False, error="amount too large"), 400
+
+    u = db.session.get(User, uid)
+    if not u:
+        return jsonify(ok=False, error="User not found"), 404
+
+    new_balance = int(u.coins or 0) + amount
+    if new_balance < 0:
+        new_balance = 0
+    u.coins = new_balance
+    db.session.commit()
+    return jsonify(ok=True, coins=int(u.coins or 0))
 
 
 # ---------------------------
@@ -635,6 +790,8 @@ def api_countries_create():
         return jsonify(ok=False, error="Not authenticated"), 401
     if not current_user.is_confirmed:
         return jsonify(ok=False, error="Email not confirmed"), 403
+    if getattr(current_user, "is_blocked", False):
+        return jsonify(ok=False, error="Blocked"), 403
 
     if Country.query.filter_by(owner_user_id=current_user.id).first():
         return jsonify(ok=False, error="Ти вже маєш країну. 1 акаунт = 1 країна."), 409
@@ -679,9 +836,6 @@ def api_countries_create():
 
 @app.get("/api/countries/<int:cid>")
 def api_country_details(cid: int):
-    """
-    Used by your country panel in map.js
-    """
     c = db.session.get(Country, cid)
     if not c:
         return jsonify(ok=False, error="Country not found"), 404
@@ -715,34 +869,20 @@ def _country_polygon_ring(country: Country):
 
 
 def _resources_near_point_in_country(country: Country, lng: float, lat: float):
-    """
-    Returns resource nodes that are:
-    - inside the country polygon
-    - within FACTORY_PICK_RADIUS_KM from (lng, lat)
-    """
     ring = _country_polygon_ring(country)
     if not ring:
         return []
 
     near = []
     for n in RESOURCE_NODES:
-        # must be inside polygon
         if not point_in_polygon(n["lng"], n["lat"], ring):
             continue
-        # must be near the build point
         if haversine_km(lng, lat, n["lng"], n["lat"]) <= FACTORY_PICK_RADIUS_KM:
             near.append(n)
     return near
 
 
 def _calc_factory_rate_per_hour(factory: Factory) -> float:
-    """
-    Rate depends on blueprint base income and local resource strength.
-    Simple and cool:
-      effective_strength = avg strength of required resource types near factory (0..1)
-      multiplier = 0.75 + 0.65*effective_strength  (range ~0.75..1.40)
-      level multiplier = 1 + (level-1)*0.22
-    """
     bp = FACTORY_BLUEPRINTS.get(factory.blueprint)
     if not bp:
         return 0.0
@@ -778,7 +918,6 @@ def _accrue_factory(factory: Factory, now: datetime):
     if dt_hours <= 0:
         return
 
-    # cap offline
     dt_hours = min(dt_hours, FACTORY_ACCUM_CAP_HOURS)
 
     rate = _calc_factory_rate_per_hour(factory)
@@ -790,9 +929,6 @@ def _accrue_factory(factory: Factory, now: datetime):
 
 @app.get("/api/factories")
 def api_factories_list():
-    """
-    Returns all factories as GeoJSON for map markers (public).
-    """
     items = Factory.query.order_by(Factory.created_at.asc()).all()
     fc = {"type": "FeatureCollection", "features": [f.to_feature() for f in items]}
     return jsonify(ok=True, data=fc)
@@ -801,9 +937,9 @@ def api_factories_list():
 @app.get("/api/my/factories")
 @login_required
 def api_my_factories():
-    """
-    Returns my factories with accrual preview.
-    """
+    if getattr(current_user, "is_blocked", False):
+        return jsonify(ok=False, error="Blocked"), 403
+
     now = datetime.utcnow()
     items = Factory.query.filter_by(owner_user_id=current_user.id).all()
     out = []
@@ -828,10 +964,8 @@ def api_my_factories():
 @app.post("/api/factories")
 @login_required
 def api_factory_build():
-    """
-    Build a factory at a map point.
-    Body: { country_id, blueprint, lng, lat }
-    """
+    if getattr(current_user, "is_blocked", False):
+        return jsonify(ok=False, error="Blocked"), 403
     if not current_user.is_confirmed:
         return jsonify(ok=False, error="Email not confirmed"), 403
 
@@ -856,7 +990,6 @@ def api_factory_build():
     if country.owner_user_id != current_user.id:
         return jsonify(ok=False, error="Not your country"), 403
 
-    # limit factories per country
     cnt = Factory.query.filter_by(country_id=country.id).count()
     if cnt >= FACTORY_MAX_PER_COUNTRY:
         return jsonify(ok=False, error=f"Factory limit reached (max {FACTORY_MAX_PER_COUNTRY})"), 400
@@ -871,8 +1004,6 @@ def api_factory_build():
     if int(current_user.coins or 0) < total_cost:
         return jsonify(ok=False, error=f"Недостатньо монет. Треба {total_cost} EC."), 400
 
-    # Resource requirements:
-    # You must have required resource nodes inside country and within radius of building point.
     near = _resources_near_point_in_country(country, float(lng), float(lat))
     req = bp.get("requires", {})
     missing = []
@@ -888,7 +1019,6 @@ def api_factory_build():
     if missing:
         return jsonify(ok=False, error=f"Нема потрібних ресурсів поруч: {', '.join(missing)} (радіус {FACTORY_PICK_RADIUS_KM} км)."), 400
 
-    # charge
     current_user.coins = int(current_user.coins or 0) - total_cost
 
     f = Factory(
@@ -912,6 +1042,9 @@ def api_factory_build():
 @app.post("/api/factories/<int:fid>/collect")
 @login_required
 def api_factory_collect(fid: int):
+    if getattr(current_user, "is_blocked", False):
+        return jsonify(ok=False, error="Blocked"), 403
+
     f = db.session.get(Factory, fid)
     if not f:
         return jsonify(ok=False, error="Factory not found"), 404
@@ -936,18 +1069,18 @@ def api_factory_collect(fid: int):
 @app.post("/api/factories/<int:fid>/upgrade")
 @login_required
 def api_factory_upgrade(fid: int):
+    if getattr(current_user, "is_blocked", False):
+        return jsonify(ok=False, error="Blocked"), 403
+
     f = db.session.get(Factory, fid)
     if not f:
         return jsonify(ok=False, error="Factory not found"), 404
     if f.owner_user_id != current_user.id:
         return jsonify(ok=False, error="Not yours"), 403
 
-    # accrue first so you don't lose time
     now = datetime.utcnow()
     _accrue_factory(f, now)
 
-    # Upgrade cost scales
-    # Lv2 = 350, Lv3=520, Lv4=760...
     next_lvl = int(f.level or 1) + 1
     cost = int(260 * (next_lvl ** 1.55))
 
@@ -962,10 +1095,46 @@ def api_factory_upgrade(fid: int):
 
 
 # ---------------------------
+# Tiny schema ensure for SQLite
+# ---------------------------
+def _ensure_user_columns_sqlite():
+    """
+    SQLite only: add new columns if DB already existed.
+    Safe ALTER TABLE with checks.
+    """
+    try:
+        cols = [r[1] for r in db.session.execute(sa_text("PRAGMA table_info(user)")).fetchall()]
+        alters = []
+        if "is_admin" not in cols:
+            alters.append("ALTER TABLE user ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0")
+        if "is_blocked" not in cols:
+            alters.append("ALTER TABLE user ADD COLUMN is_blocked BOOLEAN NOT NULL DEFAULT 0")
+        if "blocked_reason" not in cols:
+            alters.append("ALTER TABLE user ADD COLUMN blocked_reason VARCHAR(255)")
+        if "blocked_at" not in cols:
+            alters.append("ALTER TABLE user ADD COLUMN blocked_at DATETIME")
+
+        for sql in alters:
+            db.session.execute(sa_text(sql))
+        if alters:
+            db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        log.warning("DB migrate (sqlite) skipped/failed: %s", e)
+
+
+def _ensure_schema():
+    uri = (app.config.get("SQLALCHEMY_DATABASE_URI") or "")
+    if uri.startswith("sqlite"):
+        _ensure_user_columns_sqlite()
+
+
+# ---------------------------
 # Init DB once per dyno boot
 # ---------------------------
 with app.app_context():
     db.create_all()
+    _ensure_schema()
 
 
 if __name__ == "__main__":
