@@ -1,15 +1,16 @@
 # app.py
-# EarthCity — Globe + Auth + MMO Countries + Resources + Factories
-# Run local: python app.py
-# Heroku: gunicorn app:app
+# EarthCity — Heroku-ready (HTTPS + Postgres + Email confirm + MMO Countries + Resources + Factories)
+# Local run:  python app.py
+# Heroku run: gunicorn app:app
 
 import os
 import json
 import math
+import logging
 from datetime import datetime
 from urllib.parse import urljoin
 
-from flask import Flask, render_template, request, url_for, jsonify
+from flask import Flask, render_template, request, url_for, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import (
     LoginManager, UserMixin,
@@ -19,6 +20,13 @@ from flask_mail import Mail, Message
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
+
+
+# ---------------------------
+# Logging (Heroku logs)
+# ---------------------------
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("earthcity")
 
 
 # ---------------------------
@@ -37,50 +45,52 @@ FACTORY_MAX_PER_COUNTRY = 40
 FACTORY_ACCUM_CAP_HOURS = 72
 FACTORY_PICK_RADIUS_KM = 120
 
-TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24  # 24h
+
+# ---------------------------
+# Config helpers (Heroku)
+# ---------------------------
+def _normalize_db_url(raw: str) -> str:
+    """
+    Heroku used to provide postgres:// which SQLAlchemy wants as postgresql://
+    """
+    if not raw:
+        return "sqlite:///app.db"
+    if raw.startswith("postgres://"):
+        return raw.replace("postgres://", "postgresql://", 1)
+    return raw
 
 
 # ---------------------------
-# App + Config
+# App
 # ---------------------------
 app = Flask(__name__)
 
-# Heroku sits behind proxy -> correct scheme/host for url_for/external links
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+# IMPORTANT: Heroku is behind a proxy; make Flask understand HTTPS + host correctly
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev_change_me")
 app.config["SECURITY_SALT"] = os.getenv("SECURITY_SALT", "dev_salt_change_me")
 
-# Heroku Postgres provides DATABASE_URL=postgres://... (SQLAlchemy expects postgresql://)
-db_url = os.getenv("DATABASE_URL", "sqlite:///app.db")
-if db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql://", 1)
-
-app.config["SQLALCHEMY_DATABASE_URI"] = db_url
+app.config["SQLALCHEMY_DATABASE_URI"] = _normalize_db_url(os.getenv("DATABASE_URL", "sqlite:///app.db"))
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-# Better cookie behavior in production
-is_prod = os.getenv("FLASK_ENV") == "production" or os.getenv("HEROKU_APP_NAME") is not None
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_HTTPONLY"] = True
-if is_prod:
-    # on https deployments
-    app.config["SESSION_COOKIE_SECURE"] = True
-    app.config["PREFERRED_URL_SCHEME"] = "https"
-else:
-    app.config["PREFERRED_URL_SCHEME"] = "http"
+# Make url_for(..., _external=True) generate https on Heroku
+app.config["PREFERRED_URL_SCHEME"] = "https"
 
-# Gmail SMTP (use App Password)
+# Cookies (optional but полезно on https)
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = True
+
+# Mail (Gmail SMTP)
 app.config["MAIL_SERVER"] = os.getenv("MAIL_SERVER", "smtp.gmail.com")
 app.config["MAIL_PORT"] = int(os.getenv("MAIL_PORT", "587"))
 app.config["MAIL_USE_TLS"] = True
 app.config["MAIL_USE_SSL"] = False
 app.config["MAIL_USERNAME"] = os.getenv("MAIL_USERNAME", "")
 app.config["MAIL_PASSWORD"] = os.getenv("MAIL_PASSWORD", "")
-app.config["MAIL_DEFAULT_SENDER"] = os.getenv(
-    "MAIL_DEFAULT_SENDER",
-    app.config["MAIL_USERNAME"] or "no-reply@example.com"
-)
+app.config["MAIL_DEFAULT_SENDER"] = os.getenv("MAIL_DEFAULT_SENDER", app.config["MAIL_USERNAME"] or "no-reply@example.com")
+
+TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24  # 24h
 
 
 # ---------------------------
@@ -203,15 +213,60 @@ RESOURCE_NODES = [
 ]
 
 FACTORY_BLUEPRINTS = {
-    "steel_mill": {"name":"Steel Mill","icon":"🏗️","desc":"Переробляє Iron+Coal в стабільний прибуток.","build_cost":900,"upkeep":0,"base_income_per_hour":70,"requires":{"iron":1,"coal":1}},
-    "oil_refinery": {"name":"Oil Refinery","icon":"🛢️","desc":"Нафта → гроші. Потребує Oil поряд.","build_cost":1100,"upkeep":0,"base_income_per_hour":95,"requires":{"oil":1}},
-    "gas_plant": {"name":"Gas Plant","icon":"🔥","desc":"Газова енергетика. Стабільний дохід.","build_cost":980,"upkeep":0,"base_income_per_hour":82,"requires":{"gas":1}},
-    "hydro_plant": {"name":"Hydro Plant","icon":"🌊","desc":"Потребує Hydro Potential поруч.","build_cost":950,"upkeep":0,"base_income_per_hour":78,"requires":{"hydro":1}},
-    "farm_complex": {"name":"Farm Complex","icon":"🌾","desc":"Потребує Farmland.","build_cost":650,"upkeep":0,"base_income_per_hour":52,"requires":{"farmland":1}},
-    "waterworks": {"name":"Waterworks","icon":"💧","desc":"Потребує Water поруч.","build_cost":720,"upkeep":0,"base_income_per_hour":50,"requires":{"water":1}},
-    "rare_lab": {"name":"Rare Lab","icon":"💎","desc":"Потребує Rare Minerals.","build_cost":1400,"upkeep":0,"base_income_per_hour":130,"requires":{"rare":1}},
-    "gold_mint": {"name":"Gold Mint","icon":"🪙","desc":"Потребує Gold поруч.","build_cost":1350,"upkeep":0,"base_income_per_hour":125,"requires":{"gold":1}},
-    "shipyard": {"name":"Shipyard","icon":"⚓","desc":"Потребує Fish.","build_cost":1000,"upkeep":0,"base_income_per_hour":88,"requires":{"fish":1}},
+    "steel_mill": {
+        "name": "Steel Mill", "icon": "🏗️",
+        "desc": "Переробляє Iron+Coal в стабільний прибуток.",
+        "build_cost": 900, "upkeep": 0, "base_income_per_hour": 70,
+        "requires": {"iron": 1, "coal": 1}
+    },
+    "oil_refinery": {
+        "name": "Oil Refinery", "icon": "🛢️",
+        "desc": "Нафта → гроші. Потребує Oil поряд.",
+        "build_cost": 1100, "upkeep": 0, "base_income_per_hour": 95,
+        "requires": {"oil": 1}
+    },
+    "gas_plant": {
+        "name": "Gas Plant", "icon": "🔥",
+        "desc": "Газова енергетика. Стабільний дохід.",
+        "build_cost": 980, "upkeep": 0, "base_income_per_hour": 82,
+        "requires": {"gas": 1}
+    },
+    "hydro_plant": {
+        "name": "Hydro Plant", "icon": "🌊",
+        "desc": "Потребує Hydro Potential поруч.",
+        "build_cost": 950, "upkeep": 0, "base_income_per_hour": 78,
+        "requires": {"hydro": 1}
+    },
+    "farm_complex": {
+        "name": "Farm Complex", "icon": "🌾",
+        "desc": "Потребує Farmland. Дешево — хороший старт.",
+        "build_cost": 650, "upkeep": 0, "base_income_per_hour": 52,
+        "requires": {"farmland": 1}
+    },
+    "waterworks": {
+        "name": "Waterworks", "icon": "💧",
+        "desc": "Потребує Water поруч. Дає базовий дохід.",
+        "build_cost": 720, "upkeep": 0, "base_income_per_hour": 50,
+        "requires": {"water": 1}
+    },
+    "rare_lab": {
+        "name": "Rare Lab", "icon": "💎",
+        "desc": "Високий дохід. Потребує Rare Minerals.",
+        "build_cost": 1400, "upkeep": 0, "base_income_per_hour": 130,
+        "requires": {"rare": 1}
+    },
+    "gold_mint": {
+        "name": "Gold Mint", "icon": "🪙",
+        "desc": "Потребує Gold поруч. Потужний прибуток.",
+        "build_cost": 1350, "upkeep": 0, "base_income_per_hour": 125,
+        "requires": {"gold": 1}
+    },
+    "shipyard": {
+        "name": "Shipyard", "icon": "⚓",
+        "desc": "Потребує Fish (прибережні зони).",
+        "build_cost": 1000, "upkeep": 0, "base_income_per_hour": 88,
+        "requires": {"fish": 1}
+    },
 }
 
 
@@ -231,7 +286,6 @@ class User(db.Model, UserMixin):
     coins = db.Column(db.Integer, default=START_COINS, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
-
 class Country(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     owner_user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
@@ -241,8 +295,8 @@ class Country(db.Model):
 
     area_km2 = db.Column(db.Float, nullable=False, default=0.0)
     create_cost = db.Column(db.Integer, nullable=False, default=0)
-    geom_json = db.Column(db.Text, nullable=False)
 
+    geom_json = db.Column(db.Text, nullable=False)  # {"type":"Polygon","coordinates":[...]}
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     owner = db.relationship("User", lazy=True)
@@ -268,7 +322,6 @@ class Country(db.Model):
             "geometry": geom
         }
 
-
 class Factory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     country_id = db.Column(db.Integer, db.ForeignKey("country.id"), nullable=False)
@@ -282,8 +335,8 @@ class Factory(db.Model):
     lat = db.Column(db.Float, nullable=False)
 
     level = db.Column(db.Integer, nullable=False, default=1)
-
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
     stored_coins = db.Column(db.Integer, default=0, nullable=False)
     last_collected_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
@@ -329,32 +382,52 @@ def parse_confirm_token(token: str):
     return _serializer().loads(token, max_age=TOKEN_MAX_AGE_SECONDS)
 
 def absolute_url(path: str) -> str:
-    # request.url_root respects ProxyFix -> correct https on Heroku
-    return urljoin(request.url_root, path.lstrip("/"))
+    """
+    Heroku sometimes gives http:// in request.host_url (because of proxy).
+    ProxyFix + replace makes confirm links always HTTPS.
+    """
+    base = request.host_url
+    if base.startswith("http://"):
+        base = base.replace("http://", "https://", 1)
+    return urljoin(base, path.lstrip("/"))
 
 def send_confirmation_email(user: User) -> dict:
     token = make_confirm_token(user)
     link = absolute_url(url_for("confirm_email", token=token))
 
-    # Dev fallback
+    # If creds not set -> DEV mode (still gives working link)
     if not app.config["MAIL_USERNAME"] or not app.config["MAIL_PASSWORD"]:
-        print("\n[DEV] Confirmation link:", link, "\n")
-        return {"sent": False, "dev_link": link}
+        log.warning("[MAIL] Missing MAIL_USERNAME or MAIL_PASSWORD. DEV link: %s", link)
+        return {"sent": False, "dev_link": link, "error": "MAIL creds missing"}
 
     try:
         html = render_template("email_confirm.html", username=user.username, link=link)
         msg = Message(
             subject="Підтвердження email — EarthCity",
             recipients=[user.email],
-            html=html
+            html=html,
+            sender=app.config["MAIL_DEFAULT_SENDER"]
         )
         mail.send(msg)
-        return {"sent": True, "dev_link": None}
+        log.info("[MAIL] Sent confirmation to %s", user.email)
+        return {"sent": True, "dev_link": None, "error": None}
     except Exception as e:
-        # Don't crash registration if mail fails
-        print("\n[MAIL ERROR]", repr(e))
-        print("[DEV] Confirmation link:", link, "\n")
-        return {"sent": False, "dev_link": link}
+        # On Heroku this is crucial (you'll see the SMTP error in logs)
+        log.exception("[MAIL ERROR] %s", repr(e))
+        return {"sent": False, "dev_link": link, "error": str(e)}
+
+
+# ---------------------------
+# Small routes (avoid favicon 500 / H10 confusion)
+# ---------------------------
+@app.get("/favicon.ico")
+def favicon():
+    # If you have static/favicon.ico this will serve it. If not, return 204 (no content).
+    static_path = os.path.join(app.root_path, "static")
+    ico_path = os.path.join(static_path, "favicon.ico")
+    if os.path.exists(ico_path):
+        return send_from_directory(static_path, "favicon.ico")
+    return ("", 204)
 
 
 # ---------------------------
@@ -371,17 +444,24 @@ def globe_page():
 @app.get("/api/me")
 def api_me():
     if not current_user.is_authenticated:
-        return jsonify(authenticated=False, username=None, email=None, is_confirmed=False, coins=0, has_country=False)
+        return jsonify({
+            "authenticated": False,
+            "username": None,
+            "email": None,
+            "is_confirmed": False,
+            "coins": 0,
+            "has_country": False
+        })
 
     has_country = Country.query.filter_by(owner_user_id=current_user.id).first() is not None
-    return jsonify(
-        authenticated=True,
-        username=current_user.username,
-        email=current_user.email,
-        is_confirmed=bool(current_user.is_confirmed),
-        coins=int(current_user.coins or 0),
-        has_country=bool(has_country)
-    )
+    return jsonify({
+        "authenticated": True,
+        "username": current_user.username,
+        "email": current_user.email,
+        "is_confirmed": bool(current_user.is_confirmed),
+        "coins": int(current_user.coins or 0),
+        "has_country": bool(has_country)
+    })
 
 
 @app.post("/api/register")
@@ -416,8 +496,10 @@ def api_register():
     db.session.commit()
 
     login_user(user)
+
     result = send_confirmation_email(user)
-    return jsonify(ok=True, sent=result["sent"], dev_link=result["dev_link"])
+    # We intentionally do NOT fail registration if email sending fails.
+    return jsonify(ok=True, sent=result["sent"], dev_link=result["dev_link"], mail_error=result["error"])
 
 
 @app.post("/api/login")
@@ -432,7 +514,13 @@ def api_login():
 
     login_user(user)
     has_country = Country.query.filter_by(owner_user_id=user.id).first() is not None
-    return jsonify(ok=True, is_confirmed=bool(user.is_confirmed), username=user.username, coins=int(user.coins or 0), has_country=bool(has_country))
+    return jsonify(
+        ok=True,
+        is_confirmed=bool(user.is_confirmed),
+        username=user.username,
+        coins=int(user.coins or 0),
+        has_country=bool(has_country)
+    )
 
 
 @app.post("/api/logout")
@@ -448,10 +536,10 @@ def api_resend_confirmation():
         return jsonify(ok=False, error="Not authenticated"), 401
 
     if current_user.is_confirmed:
-        return jsonify(ok=True, already=True, sent=True, dev_link=None)
+        return jsonify(ok=True, already=True, sent=True, dev_link=None, mail_error=None)
 
     result = send_confirmation_email(current_user)
-    return jsonify(ok=True, sent=result["sent"], dev_link=result["dev_link"])
+    return jsonify(ok=True, sent=result["sent"], dev_link=result["dev_link"], mail_error=result["error"])
 
 
 @app.get("/confirm/<token>")
@@ -472,7 +560,11 @@ def confirm_email(token: str):
         user.confirmed_at = datetime.utcnow()
         db.session.commit()
 
-    return render_template("confirm_result.html", ok=True, msg="Email підтверджено ✅ Повернись на вкладку з глобусом і зроби Login (або перезавантаж сторінку).")
+    return render_template(
+        "confirm_result.html",
+        ok=True,
+        msg="Email підтверджено ✅ Повернись на вкладку з глобусом і зроби Login (або перезавантаж сторінку)."
+    )
 
 
 # ---------------------------
@@ -486,6 +578,7 @@ def api_rules():
         "country_cost_per_1000_km2": COUNTRY_COST_PER_1000_KM2,
         "country_max_area_km2": COUNTRY_MAX_AREA_KM2,
         "country_max_points": COUNTRY_MAX_POINTS,
+
         "factory_place_fee": FACTORY_PLACE_FEE,
         "factory_pick_radius_km": FACTORY_PICK_RADIUS_KM,
         "factory_max_per_country": FACTORY_MAX_PER_COUNTRY
@@ -532,8 +625,7 @@ def api_countries_list():
     fc = {"type": "FeatureCollection", "features": [c.to_feature() for c in countries]}
     return jsonify(ok=True, data=fc)
 
-
-def _validate_polygon(geom: dict) -> tuple[bool, str]:
+def _validate_polygon(geom: dict):
     if not isinstance(geom, dict):
         return False, "Geometry must be object"
     if geom.get("type") != "Polygon":
@@ -563,7 +655,6 @@ def _validate_polygon(geom: dict) -> tuple[bool, str]:
         return False, "Polygon ring must be closed (first==last)"
 
     return True, ""
-
 
 @app.post("/api/countries")
 def api_countries_create():
@@ -612,7 +703,6 @@ def api_countries_create():
     db.session.commit()
 
     return jsonify(ok=True, country=country.to_feature(), coins=int(current_user.coins or 0))
-
 
 @app.get("/api/countries/<int:cid>")
 def api_country_details(cid: int):
@@ -697,21 +787,19 @@ def _accrue_factory(factory: Factory, now: datetime):
     dt_hours = (now - last).total_seconds() / 3600.0
     if dt_hours <= 0:
         return
-
     dt_hours = min(dt_hours, FACTORY_ACCUM_CAP_HOURS)
+
     rate = _calc_factory_rate_per_hour(factory)
     gain = int(math.floor(rate * dt_hours))
     if gain > 0:
         factory.stored_coins = int(factory.stored_coins or 0) + gain
     factory.last_collected_at = now
 
-
 @app.get("/api/factories")
 def api_factories_list():
     items = Factory.query.order_by(Factory.created_at.asc()).all()
     fc = {"type": "FeatureCollection", "features": [f.to_feature() for f in items]}
     return jsonify(ok=True, data=fc)
-
 
 @app.get("/api/my/factories")
 @login_required
@@ -735,7 +823,6 @@ def api_my_factories():
         })
     db.session.commit()
     return jsonify(ok=True, data=out, coins=int(current_user.coins or 0))
-
 
 @app.post("/api/factories")
 @login_required
@@ -781,12 +868,8 @@ def api_factory_build():
     near = _resources_near_point_in_country(country, float(lng), float(lat))
     req = bp.get("requires", {})
     missing = []
-
     for rtype, need_count in req.items():
-        found = 0
-        for n in near:
-            if n["type"] == rtype:
-                found += 1
+        found = sum(1 for n in near if n["type"] == rtype)
         if found < int(need_count):
             missing.append(rtype)
 
@@ -812,7 +895,6 @@ def api_factory_build():
 
     return jsonify(ok=True, factory=f.to_feature(), coins=int(current_user.coins or 0))
 
-
 @app.post("/api/factories/<int:fid>/collect")
 @login_required
 def api_factory_collect(fid: int):
@@ -833,8 +915,8 @@ def api_factory_collect(fid: int):
     f.stored_coins = 0
     current_user.coins = int(current_user.coins or 0) + amount
     db.session.commit()
-    return jsonify(ok=True, collected=amount, coins=int(current_user.coins or 0))
 
+    return jsonify(ok=True, collected=amount, coins=int(current_user.coins or 0))
 
 @app.post("/api/factories/<int:fid>/upgrade")
 @login_required
@@ -857,11 +939,12 @@ def api_factory_upgrade(fid: int):
     current_user.coins = int(current_user.coins or 0) - cost
     f.level = next_lvl
     db.session.commit()
+
     return jsonify(ok=True, level=int(f.level), coins=int(current_user.coins or 0))
 
 
 # ---------------------------
-# Optional: preview email template
+# Optional preview
 # ---------------------------
 @app.get("/__email_preview")
 def email_preview():
@@ -869,9 +952,15 @@ def email_preview():
 
 
 # ---------------------------
-# Start
+# DB init
+# ---------------------------
+with app.app_context():
+    db.create_all()
+
+
+# ---------------------------
+# Local run
 # ---------------------------
 if __name__ == "__main__":
-    with app.app_context():
-        db.create_all()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=not is_prod)
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=True)
