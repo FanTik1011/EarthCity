@@ -243,6 +243,115 @@
   map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
   map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
 
+  /* =========================================================
+     LAND MASK (NEW)
+     - Зелені зони = суходіл
+     - На морі/океані країну ставити НЕ можна
+     Потрібен GeoJSON суходолу: /static/data/land.geojson
+     ========================================================= */
+
+  let LAND = { type: "FeatureCollection", features: [] };
+  let LAND_READY = false;
+
+  // Ray casting point-in-ring
+  function pointInRing(lng, lat, ring) {
+    // ring: [[lng,lat], ...] (closed or not)
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const xi = ring[i][0], yi = ring[i][1];
+      const xj = ring[j][0], yj = ring[j][1];
+
+      const intersect = ((yi > lat) !== (yj > lat)) &&
+        (lng < (xj - xi) * (lat - yi) / ((yj - yi) || 1e-12) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  function pointInPolygonGeom(lng, lat, geom) {
+    if (!geom) return false;
+
+    if (geom.type === "Polygon") {
+      const rings = geom.coordinates || [];
+      if (!rings.length) return false;
+      // inside outer ring AND not inside holes
+      if (!pointInRing(lng, lat, rings[0])) return false;
+      for (let h = 1; h < rings.length; h++) {
+        if (pointInRing(lng, lat, rings[h])) return false;
+      }
+      return true;
+    }
+
+    if (geom.type === "MultiPolygon") {
+      for (const poly of (geom.coordinates || [])) {
+        const rings = poly || [];
+        if (!rings.length) continue;
+        if (!pointInRing(lng, lat, rings[0])) continue;
+        let inHole = false;
+        for (let h = 1; h < rings.length; h++) {
+          if (pointInRing(lng, lat, rings[h])) { inHole = true; break; }
+        }
+        if (!inHole) return true;
+      }
+      return false;
+    }
+
+    return false;
+  }
+
+  function isOnLand(lng, lat) {
+    if (!LAND_READY || !LAND || !Array.isArray(LAND.features)) return true; // fallback: не блокуємо якщо маски нема
+    // швидко: перебираємо фічі (для 110m норм)
+    for (const f of LAND.features) {
+      if (pointInPolygonGeom(lng, lat, f.geometry)) return true;
+    }
+    return false;
+  }
+
+  async function loadLandMask() {
+    try {
+      // або зроби /api/landmask — тоді зміниш URL тут
+      const r = await fetch("/static/data/land.geojson", { cache: "force-cache" });
+      const j = await r.json().catch(() => null);
+      if (j && j.type) {
+        LAND = j;
+        LAND_READY = true;
+      }
+    } catch (e) {
+      console.warn("Land mask not loaded (OK for MVP).", e);
+      LAND_READY = false;
+    }
+  }
+
+  function addLandLayers() {
+    if (!LAND_READY) return;
+    if (map.getSource("landmask")) return;
+
+    map.addSource("landmask", { type: "geojson", data: LAND });
+
+    // зелена зона (суходіл)
+    map.addLayer({
+      id: "landmask-green",
+      type: "fill",
+      source: "landmask",
+      paint: {
+        "fill-color": "rgba(34,197,94,1)",
+        "fill-opacity": 0.08
+      }
+    }, "countries-fill"); // під країнами/вище землі
+
+    map.addLayer({
+      id: "landmask-green-line",
+      type: "line",
+      source: "landmask",
+      paint: {
+        "line-color": "rgba(34,197,94,0.35)",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 1.2, 0.6, 6, 1.6],
+        "line-opacity": 0.7
+      }
+    }, "countries-fill");
+  }
+
   // ---- Resources (server) ----
   let RESOURCES = { type:"FeatureCollection", features: [] };
   const RESOURCE_META = {
@@ -501,6 +610,8 @@
         map.getCanvas().style.cursor = "crosshair";
         selectedCountryId = null;
         if (map.getLayer("countries-selected")) map.setFilter("countries-selected", ["==", ["get", "id"], -1]);
+        hideFbMsg();
+        showFbMsg("🟩 Зелене = суходіл. 🟥 Вода = не можна. Країну на країну ставити не можна.");
         updateDraftEconomyUI();
       } else {
         buildActions.style.display = "none";
@@ -706,6 +817,19 @@
       return;
     }
 
+    // додатково: якщо landmask є — перевіримо хоча б, що всі точки на суходолі
+    if (LAND_READY) {
+      for (const p of draftPoints) {
+        if (!isOnLand(p.lng, p.lat)) {
+          if (countryMsg) {
+            countryMsg.style.display = "block";
+            countryMsg.textContent = "Не можна зберегти країну, якщо частина полігона у морі/океані.";
+          }
+          return;
+        }
+      }
+    }
+
     const payload = { name, color, geometry: { type: "Polygon", coordinates: [closed] } };
 
     if (btnSaveCountry) btnSaveCountry.disabled = true;
@@ -720,7 +844,11 @@
       await refreshMe();
       await refreshMyFactories();
     } catch (err) {
-      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = err.message; }
+      if (countryMsg) {
+        countryMsg.style.display = "block";
+        // якщо сервер скаже що перетин/накладка — покажемо як норм пояснення
+        countryMsg.textContent = err.message || "Помилка створення країни.";
+      }
     } finally {
       if (btnSaveCountry) btnSaveCountry.disabled = false;
     }
@@ -1000,12 +1128,18 @@
     // NEW: видаємо 5000 EC на старт (через бекенд) якщо треба
     await grantStartCoinsIfNeeded();
 
+    // NEW: land mask
+    await loadLandMask();
+
     await loadResources();
     addResourceLayers();
     addResourceMarkers();
 
     await loadCountries();
     addCountriesLayers();
+
+    // NEW: land layers (після countries, щоб "insertBefore" не впав)
+    addLandLayers();
 
     addDraftLayers();
 
@@ -1059,8 +1193,21 @@
     // Create country mode
     if (mode !== "create_country") return;
 
+    // ---- CREATE COUNTRY: COUNTRY-ON-COUNTRY BLOCK (existing + message) ----
     const feats = map.queryRenderedFeatures(e.point, { layers: ["countries-fill"] });
-    if (feats && feats.length) return;
+    if (feats && feats.length) {
+      showFbMsg("❌ Не можна створювати країну поверх іншої країни.");
+      return;
+    }
+
+    // ---- CREATE COUNTRY: LAND CHECK (NEW) ----
+    if (LAND_READY) {
+      const ok = isOnLand(e.lngLat.lng, e.lngLat.lat);
+      if (!ok) {
+        showFbMsg("🟥 Тут вода (море/океан). Країну можна ставити тільки на суходолі (🟩).");
+        return;
+      }
+    }
 
     if (draftPoints.length >= RULES.country_max_points) return;
 
