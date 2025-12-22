@@ -484,23 +484,6 @@ def api_me():
     )
 
 
-@app.post("/api/me/grant_start_coins")
-@login_required
-def api_grant_start_coins():
-    if bool(getattr(current_user, "starter_granted", True)):
-        return jsonify(ok=True, already=True, coins=int(current_user.coins or 0))
-
-    if int(current_user.coins or 0) > 0:
-        current_user.starter_granted = True
-        db.session.commit()
-        return jsonify(ok=True, already=True, coins=int(current_user.coins or 0))
-
-    current_user.coins = int(current_user.coins or 0) + START_COINS
-    current_user.starter_granted = True
-    db.session.commit()
-    return jsonify(ok=True, coins=int(current_user.coins or 0))
-
-
 @app.post("/api/register")
 def api_register():
     data = request.get_json(force=True, silent=True) or {}
@@ -527,15 +510,13 @@ def api_register():
         password_hash=generate_password_hash(password),
         is_confirmed=False,
         confirmed_at=None,
-        coins=START_COINS,      # ✅ everyone gets 5000 (default)
+        coins=START_COINS,
         starter_granted=True
     )
     db.session.add(user)
     db.session.commit()
 
-    # ✅ AUTO ADMIN for your email
     auto_promote_admin(user)
-
     login_user(user)
 
     result = send_confirmation_email(user)
@@ -556,8 +537,6 @@ def api_login():
         return jsonify(ok=False, error="Акаунт заблоковано адміністратором."), 403
 
     login_user(user)
-
-    # ✅ AUTO ADMIN for your email
     auto_promote_admin(user)
 
     has_country = Country.query.filter_by(owner_user_id=user.id).first() is not None
@@ -810,6 +789,14 @@ def api_countries_create():
     if not ok:
         return jsonify(ok=False, error=err), 400
 
+    # ✅ LAND CHECK (sea/ocean)
+    if not _polygon_is_on_land(geom):
+        return jsonify(ok=False, error="Країну можна створювати лише на суші (не на морі/океані)."), 400
+
+    # ✅ OVERLAP CHECK (country-on-country)
+    if _geom_intersects_any_country(geom):
+        return jsonify(ok=False, error="Не можна створювати країну на країні (перетин з іншою країною)."), 400
+
     area_km2 = polygon_area_km2_equirect(geom)
     if area_km2 > COUNTRY_MAX_AREA_KM2:
         return jsonify(ok=False, error=f"Країна занадто велика: {int(area_km2):,} км² (макс {COUNTRY_MAX_AREA_KM2:,} км²)"), 400
@@ -831,6 +818,7 @@ def api_countries_create():
     db.session.add(country)
     db.session.commit()
 
+    # ✅ IMPORTANT: return response (was missing in your pasted version)
     return jsonify(ok=True, country=country.to_feature(), coins=int(current_user.coins or 0))
 
 
@@ -1127,6 +1115,180 @@ def _ensure_schema():
     uri = (app.config.get("SQLALCHEMY_DATABASE_URI") or "")
     if uri.startswith("sqlite"):
         _ensure_user_columns_sqlite()
+
+
+# ---------------------------
+# LAND (GeoJSON) + polygon intersection helpers
+# ---------------------------
+LAND_GEOJSON_PATH = os.path.join(app.root_path, "static", "data", "land.geojson")
+LAND_FEATURES = None  # cached parsed land polygons
+
+def _load_land_geojson():
+    """
+    Loads land polygons from static/data/land.geojson once.
+    Expected: FeatureCollection of Polygon / MultiPolygon.
+    """
+    global LAND_FEATURES
+    if LAND_FEATURES is not None:
+        return LAND_FEATURES
+
+    if not os.path.exists(LAND_GEOJSON_PATH):
+        log.warning("land.geojson not found at %s (sea check disabled)", LAND_GEOJSON_PATH)
+        LAND_FEATURES = []
+        return LAND_FEATURES
+
+    try:
+        with open(LAND_GEOJSON_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        feats = data.get("features") or []
+        LAND_FEATURES = feats
+        log.info("Loaded land.geojson features: %d", len(LAND_FEATURES))
+        return LAND_FEATURES
+    except Exception as e:
+        log.warning("Failed to load land.geojson (%s). Sea check disabled.", e)
+        LAND_FEATURES = []
+        return LAND_FEATURES
+
+
+def _rings_from_geom(geom: dict):
+    """
+    Returns list of rings (each ring is list of [lng,lat] closed),
+    supports Polygon and MultiPolygon.
+    Only outer rings are used (coords[0]).
+    """
+    if not geom or not isinstance(geom, dict):
+        return []
+
+    gtype = geom.get("type")
+    coords = geom.get("coordinates")
+
+    rings = []
+    if gtype == "Polygon":
+        if isinstance(coords, list) and coords and isinstance(coords[0], list):
+            ring = coords[0]
+            if isinstance(ring, list) and len(ring) >= 4:
+                rings.append(ring)
+    elif gtype == "MultiPolygon":
+        if isinstance(coords, list):
+            for poly in coords:
+                if not poly or not isinstance(poly, list):
+                    continue
+                ring = poly[0] if poly and isinstance(poly[0], list) else None
+                if isinstance(ring, list) and len(ring) >= 4:
+                    rings.append(ring)
+    return rings
+
+
+def _point_on_land(lng: float, lat: float) -> bool:
+    """
+    True if point is inside ANY land polygon ring.
+    If land.geojson missing/empty -> sea check disabled (ALLOW).
+    """
+    feats = _load_land_geojson()
+    if not feats:
+        return True  # ✅ do not block creation if file missing
+
+    for feat in feats:
+        g = (feat or {}).get("geometry") or {}
+        for ring in _rings_from_geom(g):
+            if point_in_polygon(lng, lat, ring):
+                return True
+    return False
+
+
+def _polygon_is_on_land(geom: dict) -> bool:
+    """
+    Sea rule: require ALL polygon vertices to be on land.
+    (Simple, fast, MVP)
+    """
+    ring = (geom.get("coordinates") or [[]])[0]
+    pts = ring[:-1]  # without closing point
+    if not pts:
+        return False
+    for lng, lat in pts:
+        if not _point_on_land(float(lng), float(lat)):
+            return False
+    return True
+
+
+# ---- polygon intersection (country-on-country) ----
+def _orient(a, b, c):
+    return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])
+
+def _on_segment(a, b, c):
+    return (min(a[0], b[0]) <= c[0] <= max(a[0], b[0]) and
+            min(a[1], b[1]) <= c[1] <= max(a[1], b[1]))
+
+def _segments_intersect(p1, p2, q1, q2) -> bool:
+    o1 = _orient(p1, p2, q1)
+    o2 = _orient(p1, p2, q2)
+    o3 = _orient(q1, q2, p1)
+    o4 = _orient(q1, q2, p2)
+
+    if (o1 > 0) != (o2 > 0) and (o3 > 0) != (o4 > 0):
+        return True
+
+    eps = 1e-12
+    if abs(o1) < eps and _on_segment(p1, p2, q1): return True
+    if abs(o2) < eps and _on_segment(p1, p2, q2): return True
+    if abs(o3) < eps and _on_segment(q1, q2, p1): return True
+    if abs(o4) < eps and _on_segment(q1, q2, p2): return True
+
+    return False
+
+
+def _rings_intersect(ringA, ringB) -> bool:
+    """
+    True if polygons overlap/touch:
+    - any edge intersects
+    - or A contains a vertex of B
+    - or B contains a vertex of A
+    """
+    if not ringA or not ringB:
+        return False
+
+    A = ringA[:-1]
+    B = ringB[:-1]
+    if len(A) < 3 or len(B) < 3:
+        return False
+
+    for i in range(len(A)):
+        p1 = A[i]
+        p2 = A[(i + 1) % len(A)]
+        for j in range(len(B)):
+            q1 = B[j]
+            q2 = B[(j + 1) % len(B)]
+            if _segments_intersect(p1, p2, q1, q2):
+                return True
+
+    if point_in_polygon(B[0][0], B[0][1], ringA):
+        return True
+    if point_in_polygon(A[0][0], A[0][1], ringB):
+        return True
+
+    return False
+
+
+def _geom_intersects_any_country(new_geom: dict) -> bool:
+    """
+    Checks if new polygon intersects ANY existing country polygon.
+    """
+    new_ring = (new_geom.get("coordinates") or [[]])[0]
+    if not new_ring:
+        return False
+
+    for c in Country.query.all():
+        try:
+            old_geom = json.loads(c.geom_json)
+            old_ring = (old_geom.get("coordinates") or [[]])[0]
+        except Exception:
+            continue
+
+        if _rings_intersect(new_ring, old_ring):
+            return True
+
+    return False
 
 
 # ---------------------------

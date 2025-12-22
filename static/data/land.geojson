@@ -1,0 +1,75 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "NorthAmerica_approx" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-168, 12], [-52, 12], [-52, 72], [-168, 72], [-168, 12]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "SouthAmerica_approx" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-92, -56], [-30, -56], [-30, 15], [-92, 15], [-92, -56]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Europe_approx" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-12, 35], [40, 35], [40, 72], [-12, 72], [-12, 35]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Africa_approx" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-20, -36], [52, -36], [52, 38], [-20, 38], [-20, -36]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Asia_approx" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [25, 1], [180, 1], [180, 78], [25, 78], [25, 1]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Australia_approx" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [110, -45], [155, -45], [155, -10], [110, -10], [110, -45]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Greenland_approx" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-74, 58], [-10, 58], [-10, 84], [-74, 84], [-74, 58]
+        ]]
+      }
+    }
+  ]
+}

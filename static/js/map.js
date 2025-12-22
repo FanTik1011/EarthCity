@@ -1,5 +1,6 @@
 // static/js/map.js
 // EarthCity — Globe + Resources(server) + Countries + Create Country + Factories(server)
+// + NEW: land-only countries (green/red zones) + no country-on-country placement + live cost while drafting
 
 (function () {
   const $ = (id) => document.getElementById(id);
@@ -32,14 +33,14 @@
 
   // Left factory sidebar
   const factorybar = $("factorybar");
-  const fbToggle = $("fbToggle");
+  const fbToggle = $("fbToggle"); // (optional if exists)
   const fbSub = $("fbSub");
   const fbMsg = $("fbMsg");
   const fbBlueprints = $("fbBlueprints");
   const fbSelected = $("fbSelected");
   const fbMyFactories = $("fbMyFactories");
   const btnFactoryMode = $("btnFactoryMode");
-  const btnCancelFactoryMode = $("btnCancelFactoryMode");
+  const btnCancelFactoryMode = $("btnCancelFactoryMode"); // (optional if exists)
   const btnTipFactory = $("btnTipFactory");
   const fbTip = $("fbTip");
 
@@ -151,7 +152,6 @@
     const j = await r.json().catch(() => ({}));
     ME = j || { authenticated:false };
 
-    // якщо бекенд не дав coins — ставимо 0 (далі може спрацювати видача стартових)
     MY_COINS = (j && typeof j.coins === "number") ? j.coins : 0;
 
     if (myCoinsEl) myCoinsEl.textContent = `${MY_COINS} EC`;
@@ -160,43 +160,6 @@
 
   function computeCountryCost(areaKm2) {
     return Math.round(RULES.country_base_cost + (areaKm2 / 1000) * RULES.country_cost_per_1000_km2);
-  }
-
-  // ---- START COINS (NEW) ----
-  // MVP: просимо бекенд видати 5000 EC один раз для нового акаунта
-  async function grantStartCoinsIfNeeded() {
-    try {
-      if (!ME || !ME.authenticated) return;
-
-      // Якщо вже є монети — нічого не робимо
-      if (typeof MY_COINS === "number" && MY_COINS > 0) return;
-
-      const key = "ec_startcoins_given_v1";
-      if (localStorage.getItem(key) === "1") return;
-
-      // просимо бекенд видати стартові монети
-      const res = await fetch("/api/me/grant_start_coins", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: RULES.start_coins })
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data && data.ok) {
-        if (typeof data.coins === "number") MY_COINS = data.coins;
-        else MY_COINS = RULES.start_coins;
-
-        if (myCoinsEl) myCoinsEl.textContent = `${MY_COINS} EC`;
-        if (myCoinsModalEl) myCoinsModalEl.textContent = `${MY_COINS} EC`;
-
-        localStorage.setItem(key, "1");
-        showFbMsg(`🎁 Starter bonus: +${RULES.start_coins} EC`);
-      }
-    } catch (e) {
-      // тихо ігноруємо, щоб не ламало UI
-      console.warn("grantStartCoinsIfNeeded failed", e);
-    }
   }
 
   // ---- Map style ----
@@ -243,113 +206,202 @@
   map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
   map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
 
-  /* =========================================================
-     LAND MASK (NEW)
-     - Зелені зони = суходіл
-     - На морі/океані країну ставити НЕ можна
-     Потрібен GeoJSON суходолу: /static/data/land.geojson
-     ========================================================= */
-
+  // =========================================================
+  // NEW: LAND CHECK (green/red zones) — requires static/data/land.geojson
+  // =========================================================
   let LAND = { type: "FeatureCollection", features: [] };
   let LAND_READY = false;
 
-  // Ray casting point-in-ring
-  function pointInRing(lng, lat, ring) {
-    // ring: [[lng,lat], ...] (closed or not)
-    let inside = false;
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      const xi = ring[i][0], yi = ring[i][1];
-      const xj = ring[j][0], yj = ring[j][1];
-
-      const intersect = ((yi > lat) !== (yj > lat)) &&
-        (lng < (xj - xi) * (lat - yi) / ((yj - yi) || 1e-12) + xi);
-      if (intersect) inside = !inside;
-    }
-    return inside;
-  }
-
-  function pointInPolygonGeom(lng, lat, geom) {
-    if (!geom) return false;
-
-    if (geom.type === "Polygon") {
-      const rings = geom.coordinates || [];
-      if (!rings.length) return false;
-      // inside outer ring AND not inside holes
-      if (!pointInRing(lng, lat, rings[0])) return false;
-      for (let h = 1; h < rings.length; h++) {
-        if (pointInRing(lng, lat, rings[h])) return false;
-      }
-      return true;
-    }
-
-    if (geom.type === "MultiPolygon") {
-      for (const poly of (geom.coordinates || [])) {
-        const rings = poly || [];
-        if (!rings.length) continue;
-        if (!pointInRing(lng, lat, rings[0])) continue;
-        let inHole = false;
-        for (let h = 1; h < rings.length; h++) {
-          if (pointInRing(lng, lat, rings[h])) { inHole = true; break; }
-        }
-        if (!inHole) return true;
-      }
-      return false;
-    }
-
-    return false;
-  }
-
-  function isOnLand(lng, lat) {
-    if (!LAND_READY || !LAND || !Array.isArray(LAND.features)) return true; // fallback: не блокуємо якщо маски нема
-    // швидко: перебираємо фічі (для 110m норм)
-    for (const f of LAND.features) {
-      if (pointInPolygonGeom(lng, lat, f.geometry)) return true;
-    }
-    return false;
-  }
-
-  async function loadLandMask() {
+  async function loadLand() {
     try {
-      // або зроби /api/landmask — тоді зміниш URL тут
       const r = await fetch("/static/data/land.geojson", { cache: "force-cache" });
-      const j = await r.json().catch(() => null);
-      if (j && j.type) {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      if (j && j.type === "FeatureCollection") {
         LAND = j;
         LAND_READY = true;
       }
     } catch (e) {
-      console.warn("Land mask not loaded (OK for MVP).", e);
       LAND_READY = false;
+      console.warn("land.geojson missing or invalid. Sea check disabled.", e);
     }
   }
 
-  function addLandLayers() {
-    if (!LAND_READY) return;
-    if (map.getSource("landmask")) return;
+  // Geometry helpers: supports Polygon + MultiPolygon in land file
+  function landRingsFromGeometry(geom) {
+    const rings = [];
+    if (!geom || typeof geom !== "object") return rings;
 
-    map.addSource("landmask", { type: "geojson", data: LAND });
+    const t = geom.type;
+    const c = geom.coordinates;
 
-    // зелена зона (суходіл)
-    map.addLayer({
-      id: "landmask-green",
-      type: "fill",
-      source: "landmask",
-      paint: {
-        "fill-color": "rgba(34,197,94,1)",
-        "fill-opacity": 0.08
+    if (t === "Polygon" && Array.isArray(c) && Array.isArray(c[0])) {
+      rings.push(c[0]);
+    } else if (t === "MultiPolygon" && Array.isArray(c)) {
+      for (const poly of c) {
+        if (Array.isArray(poly) && Array.isArray(poly[0])) rings.push(poly[0]);
       }
-    }, "countries-fill"); // під країнами/вище землі
+    }
+    return rings;
+  }
+
+  function pointInRing(lng, lat, ring) {
+    if (!ring || ring.length < 4) return false;
+    let inside = false;
+    const n = ring.length - 1;
+    let j = n - 1;
+    for (let i = 0; i < n; i++) {
+      const xi = ring[i][0], yi = ring[i][1];
+      const xj = ring[j][0], yj = ring[j][1];
+      const intersect = ((yi > lat) !== (yj > lat)) &&
+        (lng < (xj - xi) * (lat - yi) / ((yj - yi) || 1e-12) + xi);
+      if (intersect) inside = !inside;
+      j = i;
+    }
+    return inside;
+  }
+
+  function isPointOnLand(lng, lat) {
+    if (!LAND_READY) return null; // unknown
+    for (const f of (LAND.features || [])) {
+      const geom = f && f.geometry;
+      const rings = landRingsFromGeometry(geom);
+      for (const ring of rings) {
+        if (pointInRing(lng, lat, ring)) return true;
+      }
+    }
+    return false;
+  }
+
+  // Rule: all draft vertices must be on land
+  function isDraftOnLand() {
+    if (!LAND_READY) return null;
+    if (!draftPoints.length) return false;
+    for (const p of draftPoints) {
+      const ok = isPointOnLand(p.lng, p.lat);
+      if (ok !== true) return false;
+    }
+    return true;
+  }
+
+  // =========================================================
+  // NEW: Country-on-country overlap check (client-side)
+  // =========================================================
+  function orient(a, b, c) {
+    return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]);
+  }
+  function onSegment(a, b, c) {
+    return (Math.min(a[0], b[0]) <= c[0] && c[0] <= Math.max(a[0], b[0]) &&
+            Math.min(a[1], b[1]) <= c[1] && c[1] <= Math.max(a[1], b[1]));
+  }
+  function segmentsIntersect(p1, p2, q1, q2) {
+    const o1 = orient(p1, p2, q1);
+    const o2 = orient(p1, p2, q2);
+    const o3 = orient(q1, q2, p1);
+    const o4 = orient(q1, q2, p2);
+
+    if ((o1 > 0) !== (o2 > 0) && (o3 > 0) !== (o4 > 0)) return true;
+
+    const eps = 1e-12;
+    if (Math.abs(o1) < eps && onSegment(p1, p2, q1)) return true;
+    if (Math.abs(o2) < eps && onSegment(p1, p2, q2)) return true;
+    if (Math.abs(o3) < eps && onSegment(q1, q2, p1)) return true;
+    if (Math.abs(o4) < eps && onSegment(q1, q2, p2)) return true;
+
+    return false;
+  }
+
+  function ringsIntersect(ringAClosed, ringBClosed) {
+    if (!ringAClosed || !ringBClosed) return false;
+    const A = ringAClosed.slice(0, -1);
+    const B = ringBClosed.slice(0, -1);
+    if (A.length < 3 || B.length < 3) return false;
+
+    // edge-edge
+    for (let i = 0; i < A.length; i++) {
+      const p1 = A[i], p2 = A[(i + 1) % A.length];
+      for (let j = 0; j < B.length; j++) {
+        const q1 = B[j], q2 = B[(j + 1) % B.length];
+        if (segmentsIntersect(p1, p2, q1, q2)) return true;
+      }
+    }
+
+    // containment (any vertex)
+    if (pointInRing(B[0][0], B[0][1], ringAClosed)) return true;
+    if (pointInRing(A[0][0], A[0][1], ringBClosed)) return true;
+
+    return false;
+  }
+
+  function draftIntersectsAnyCountry() {
+    if (draftPoints.length < 3) return false;
+    const ring = draftPoints.map(p => [p.lng, p.lat]);
+    const closed = ring.concat([ring[0]]);
+
+    const feats = (countriesFC && countriesFC.features) ? countriesFC.features : [];
+    for (const f of feats) {
+      const g = f && f.geometry;
+      const ring2 = g && g.coordinates && g.coordinates[0];
+      if (!ring2 || ring2.length < 4) continue;
+      if (ringsIntersect(closed, ring2)) return true;
+    }
+    return false;
+  }
+
+  // =========================================================
+  // NEW: Green/Red preview point marker while drafting
+  // =========================================================
+  const DRAFT_PREVIEW = { type: "FeatureCollection", features: [] };
+  let lastPreview = null; // {lng,lat,onLand}
+
+  function addDraftPreviewLayer() {
+    if (map.getSource("draftPreview")) return;
+
+    map.addSource("draftPreview", { type: "geojson", data: DRAFT_PREVIEW });
 
     map.addLayer({
-      id: "landmask-green-line",
-      type: "line",
-      source: "landmask",
+      id: "draftPreviewDot",
+      type: "circle",
+      source: "draftPreview",
       paint: {
-        "line-color": "rgba(34,197,94,0.35)",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 1.2, 0.6, 6, 1.6],
-        "line-opacity": 0.7
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.2, 4.5, 6, 8.0],
+        "circle-color": ["case",
+          ["==", ["get", "ok"], 1], "rgba(34,197,94,1)",     // green
+          "rgba(239,68,68,1)"                              // red
+        ],
+        "circle-opacity": 0.92,
+        "circle-stroke-color": "rgba(0,0,0,0.55)",
+        "circle-stroke-width": 1
       }
-    }, "countries-fill");
+    });
+  }
+
+  function setDraftPreview(lng, lat) {
+    if (mode !== "create_country") {
+      if (DRAFT_PREVIEW.features.length) {
+        DRAFT_PREVIEW.features = [];
+        if (map.getSource("draftPreview")) map.getSource("draftPreview").setData(DRAFT_PREVIEW);
+      }
+      return;
+    }
+
+    // If land not ready, don't show red/green (avoid lying)
+    const onLand = isPointOnLand(lng, lat);
+    if (onLand === null) {
+      // clear preview
+      DRAFT_PREVIEW.features = [];
+      if (map.getSource("draftPreview")) map.getSource("draftPreview").setData(DRAFT_PREVIEW);
+      return;
+    }
+
+    lastPreview = { lng, lat, onLand };
+    DRAFT_PREVIEW.features = [{
+      type: "Feature",
+      properties: { ok: onLand ? 1 : 0 },
+      geometry: { type: "Point", coordinates: [lng, lat] }
+    }];
+
+    if (map.getSource("draftPreview")) map.getSource("draftPreview").setData(DRAFT_PREVIEW);
   }
 
   // ---- Resources (server) ----
@@ -495,7 +547,6 @@
         rm.el.classList.remove("small"); rm.el.classList.remove("tiny");
       }
     }
-    // factories reuse same CSS class logic
     for (const fm of factoryMarkers) {
       if (z < 1.6) {
         fm.el.classList.add("tiny"); fm.el.classList.remove("small");
@@ -610,8 +661,11 @@
         map.getCanvas().style.cursor = "crosshair";
         selectedCountryId = null;
         if (map.getLayer("countries-selected")) map.setFilter("countries-selected", ["==", ["get", "id"], -1]);
+
+        // hint
         hideFbMsg();
-        showFbMsg("🟩 Зелене = суходіл. 🟥 Вода = не можна. Країну на країну ставити не можна.");
+        if (!LAND_READY) showFbMsg("ℹ️ land.geojson not found → sea/ocean restriction disabled on client (server may still block).");
+
         updateDraftEconomyUI();
       } else {
         buildActions.style.display = "none";
@@ -635,12 +689,19 @@
       renderSelectedBlueprint();
       hideFbMsg();
     }
+
+    // clear preview if leaving mode
+    if (mode !== "create_country") setDraftPreview(0, 0);
   }
 
   function clearDraft() {
     draftPoints = [];
     DRAFT.features = [];
     if (map.getSource("draft")) map.getSource("draft").setData(DRAFT);
+
+    // clear preview
+    DRAFT_PREVIEW.features = [];
+    if (map.getSource("draftPreview")) map.getSource("draftPreview").setData(DRAFT_PREVIEW);
   }
 
   function addDraftLayers() {
@@ -747,14 +808,28 @@
     const tooMany = draftPoints.length > RULES.country_max_points;
     const tooPoor = MY_COINS < cost;
 
+    // NEW rules
+    const notOnLand = (isDraftOnLand() === false);      // if land ready -> strict
+    const overlaps = draftIntersectsAnyCountry();       // always possible (uses existing countries)
+
     if (btnFinish) {
-      btnFinish.disabled = tooBig || tooMany || tooPoor;
+      btnFinish.disabled = tooBig || tooMany || tooPoor || notOnLand || overlaps;
       btnFinish.style.opacity = btnFinish.disabled ? "0.6" : "1";
-      btnFinish.title = btnFinish.disabled
-        ? (tooBig ? `Too big (max ${RULES.country_max_area_km2.toLocaleString("en-US")} km²)` :
-           tooMany ? `Too many points (max ${RULES.country_max_points})` :
-           `Not enough coins`)
-        : "";
+
+      let title = "";
+      if (tooBig) title = `Too big (max ${RULES.country_max_area_km2.toLocaleString("en-US")} km²)`;
+      else if (tooMany) title = `Too many points (max ${RULES.country_max_points})`;
+      else if (tooPoor) title = "Not enough coins";
+      else if (notOnLand) title = "Country must be on land (not sea/ocean)";
+      else if (overlaps) title = "Cannot place on another country (overlap)";
+      btnFinish.title = title;
+    }
+
+    // Also show user-friendly message in fbMsg (non-spam)
+    if (mode === "create_country") {
+      if (notOnLand) showFbMsg("🔴 Не можна створювати країну на морі/океані. Став точки на суші (зелена зона).");
+      else if (overlaps) showFbMsg("⛔ Не можна створювати країну на країні. Твій полігон перетинає іншу країну.");
+      else hideFbMsg();
     }
   }
 
@@ -791,6 +866,17 @@
   async function saveCountry() {
     if (draftPoints.length < 3) return;
 
+    // Extra front checks (server will also validate)
+    const onLand = isDraftOnLand();
+    if (onLand === false) {
+      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Країну можна створювати лише на суші (не на морі/океані)."; }
+      return;
+    }
+    if (draftIntersectsAnyCountry()) {
+      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Не можна створювати країну на країні (перетин з іншою країною)."; }
+      return;
+    }
+
     const name = (countryName?.value || "").trim();
     const color = (countryColor?.value || "#7c3aed").trim();
 
@@ -817,19 +903,6 @@
       return;
     }
 
-    // додатково: якщо landmask є — перевіримо хоча б, що всі точки на суходолі
-    if (LAND_READY) {
-      for (const p of draftPoints) {
-        if (!isOnLand(p.lng, p.lat)) {
-          if (countryMsg) {
-            countryMsg.style.display = "block";
-            countryMsg.textContent = "Не можна зберегти країну, якщо частина полігона у морі/океані.";
-          }
-          return;
-        }
-      }
-    }
-
     const payload = { name, color, geometry: { type: "Polygon", coordinates: [closed] } };
 
     if (btnSaveCountry) btnSaveCountry.disabled = true;
@@ -844,11 +917,7 @@
       await refreshMe();
       await refreshMyFactories();
     } catch (err) {
-      if (countryMsg) {
-        countryMsg.style.display = "block";
-        // якщо сервер скаже що перетин/накладка — покажемо як норм пояснення
-        countryMsg.textContent = err.message || "Помилка створення країни.";
-      }
+      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = err.message; }
     } finally {
       if (btnSaveCountry) btnSaveCountry.disabled = false;
     }
@@ -1125,11 +1194,8 @@
     await loadRules();
     await refreshMe();
 
-    // NEW: видаємо 5000 EC на старт (через бекенд) якщо треба
-    await grantStartCoinsIfNeeded();
-
-    // NEW: land mask
-    await loadLandMask();
+    // NEW: load land for sea/land check
+    await loadLand();
 
     await loadResources();
     addResourceLayers();
@@ -1138,10 +1204,8 @@
     await loadCountries();
     addCountriesLayers();
 
-    // NEW: land layers (після countries, щоб "insertBefore" не впав)
-    addLandLayers();
-
     addDraftLayers();
+    addDraftPreviewLayer();
 
     await loadBlueprints();
     renderSelectedBlueprint();
@@ -1168,6 +1232,13 @@
     updateMarkerDetail();
     updateBacksideResourcesVisibility();
     updateBacksideFactoriesVisibility();
+
+    // NEW: green/red preview while drafting
+    if (mode === "create_country" && e && e.lngLat) {
+      setDraftPreview(e.lngLat.lng, e.lngLat.lat);
+    } else {
+      setDraftPreview(0, 0);
+    }
   }
 
   map.on("mousemove", updateHUD);
@@ -1183,30 +1254,24 @@
   map.on("click", async (e) => {
     // Build factory mode
     if (mode === "factory_build") {
-      const feats = map.queryRenderedFeatures(e.point, { layers: ["countries-fill"] });
-      if (!feats || !feats.length) {
-        // allow, server will validate
-      }
       return buildFactoryAt(e.lngLat.lng, e.lngLat.lat);
     }
 
     // Create country mode
     if (mode !== "create_country") return;
 
-    // ---- CREATE COUNTRY: COUNTRY-ON-COUNTRY BLOCK (existing + message) ----
+    // Do not allow placing points on existing country
     const feats = map.queryRenderedFeatures(e.point, { layers: ["countries-fill"] });
     if (feats && feats.length) {
-      showFbMsg("❌ Не можна створювати країну поверх іншої країни.");
+      showFbMsg("⛔ Тут уже є країна. Не можна ставити країну на країну.");
       return;
     }
 
-    // ---- CREATE COUNTRY: LAND CHECK (NEW) ----
-    if (LAND_READY) {
-      const ok = isOnLand(e.lngLat.lng, e.lngLat.lat);
-      if (!ok) {
-        showFbMsg("🟥 Тут вода (море/океан). Країну можна ставити тільки на суходолі (🟩).");
-        return;
-      }
+    // Do not allow placing points on sea (if land ready)
+    const onLand = isPointOnLand(e.lngLat.lng, e.lngLat.lat);
+    if (onLand === false) {
+      showFbMsg("🔴 Це море/океан. Став точку на суші (зелена зона).");
+      return;
     }
 
     if (draftPoints.length >= RULES.country_max_points) return;
@@ -1242,6 +1307,33 @@
     });
   }
 
+  // NOTE: in your HTML you have 2 elements with id="fbClose".
+  // Fix safely: bind close to ALL of them.
+  const fbCloseBtns = document.querySelectorAll("#fbClose");
+  fbCloseBtns.forEach((b) => {
+    b.addEventListener("click", () => {
+      factorybar && factorybar.classList.remove("open");
+    });
+  });
+
+  // Topbar factories button
+  let factoriesPanelOpen = false;
+
+  function setFactoriesPanel(open) {
+    factoriesPanelOpen = !!open;
+    if (!factorybar) return;
+    if (factoriesPanelOpen) factorybar.classList.add("open");
+    else factorybar.classList.remove("open");
+  }
+
+  function toggleFactoriesPanel() {
+    setFactoriesPanel(!factoriesPanelOpen);
+  }
+
+  if (btnOpenFactories) {
+    btnOpenFactories.addEventListener("click", toggleFactoriesPanel);
+  }
+
   if (btnFactoryMode) {
     btnFactoryMode.addEventListener("click", () => {
       hideFbMsg();
@@ -1268,11 +1360,9 @@
     });
   }
 
-  /* =========================================================
-     COUNTRY PANEL + FACTORIES PANEL (ADD-ON BLOCK)
-     Paste this at the VERY END of map.js
-     ========================================================= */
-
+  // =========================================================
+  // COUNTRY PANEL + FACTORIES PANEL (your previous add-on block)
+  // =========================================================
   const countryPanel = document.getElementById("countryPanel");
   const cpClose = document.getElementById("cpClose");
   const cpColor = document.getElementById("cpColor");
@@ -1285,31 +1375,8 @@
   const cpFly = document.getElementById("cpFly");
   const cpOpenFactories = document.getElementById("cpOpenFactories");
 
-  // ---------- STATE ----------
-  let factoriesPanelOpen = false;
   let currentCountryPanelId = null;
 
-  // ---------- FACTORIES PANEL ----------
-  function setFactoriesPanel(open) {
-    factoriesPanelOpen = !!open;
-    if (!factorybar) return;
-
-    if (factoriesPanelOpen) {
-      factorybar.classList.add("open");
-    } else {
-      factorybar.classList.remove("open");
-    }
-  }
-
-  function toggleFactoriesPanel() {
-    setFactoriesPanel(!factoriesPanelOpen);
-  }
-
-  if (btnOpenFactories) {
-    btnOpenFactories.addEventListener("click", toggleFactoriesPanel);
-  }
-
-  // ---------- COUNTRY PANEL ----------
   function closeCountryPanel() {
     if (!countryPanel) return;
     countryPanel.classList.remove("open");
@@ -1357,7 +1424,6 @@
     }
   }
 
-  // ---------- MAP CLICK → OPEN COUNTRY PANEL ----------
   if (window.__earthMap) {
     window.__earthMap.on("click", "countries-fill", async (e) => {
       const f = e.features?.[0];
@@ -1366,7 +1432,6 @@
       const id = Number(f.properties?.id || -1);
       if (id < 0) return;
 
-      // highlight
       window.__earthMap.setFilter(
         "countries-selected",
         ["==", ["get", "id"], id]
@@ -1377,7 +1442,6 @@
     });
   }
 
-  // ---------- PANEL BUTTONS ----------
   if (cpClose) cpClose.addEventListener("click", closeCountryPanel);
 
   if (cpFly && window.__earthMap) {
@@ -1417,13 +1481,5 @@
 
   // ---------- INIT ----------
   setFactoriesPanel(false);
-  const fbClose = document.getElementById("fbClose");
-
-  if (fbClose && factorybar) {
-    fbClose.addEventListener("click", () => {
-      factorybar.classList.remove("open");
-      // setMode("explore"); // optional
-    });
-  }
 
 })();
