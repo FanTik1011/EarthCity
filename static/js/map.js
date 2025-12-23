@@ -1740,5 +1740,14 @@
   // ---------- INIT ----------
   setFactoriesPanel(false);
   setMode("explore");
+window.EarthCity = window.EarthCity || {};
+window.EarthCity.map = map;
+window.EarthCity.postJSON = postJSON;     // твоя функція POST helper
+window.EarthCity.refreshMe = refreshMe;   // твоя
+window.EarthCity.loadCountries = loadCountries;
+window.EarthCity.getMe = () => ME;        // доступ до ME
+window.EarthCity.getRules = () => RULES;  // доступ до RULES
+window.EarthCity.getCountriesFC = () => countriesFC;
+
 
 })();
