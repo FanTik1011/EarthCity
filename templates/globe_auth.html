@@ -36,7 +36,6 @@
         <div class="pill" id="zoom">Zoom —</div>
         <div class="pill" id="topCoins">💰 —</div>
         <button class="btn-ghost" id="btnOpenFactories" type="button">🏭 Factories</button>
-        <button class="btn-ghost" id="btnExpand" type="button" title="Expand your country">🧩 Expand</button>
         <button class="btn-ghost" id="btnLogout" type="button" style="display:none;">Logout</button>
       </div>
     </div>
@@ -150,7 +149,6 @@
           <div class="cp-row">
             <button class="btn-ghost" id="cpFly" type="button">🌍 Fly to</button>
             <button class="btn-ghost" id="cpOpenFactories" type="button">🏭 Factories</button>
-            <button class="btn-ghost" id="cpExpand" type="button" style="display:none;" title="Expand this country">🧩 Expand</button>
           </div>
 
           <div class="cp-small" id="cpHint">
@@ -286,7 +284,6 @@
 
   <script src="{{ url_for('static', filename='js/map.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auth.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/expand.js') }}"></script>
   <script>
   async function updateCoins() {
     try {
