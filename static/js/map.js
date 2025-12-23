@@ -1,6 +1,7 @@
 // static/js/map.js
 // EarthCity — Globe + Resources(server) + Countries + Create Country + Factories(server)
 // + NEW: land-only countries (green/red zones) + no country-on-country placement + live cost while drafting
+// + LOD: багато ресурсів у базі, але на мапі красиво (HTML markers тільки на близькому зумі + top-N)
 
 (function () {
   const $ = (id) => document.getElementById(id);
@@ -425,6 +426,26 @@
 
   const resourceMarkers = []; // { marker, el }
 
+  // =========================================================
+  // ✅ LOD for ресурси (важке = HTML markers)
+  // - glow/core шари (circle) працюють для ВСІХ ресурсів (легко)
+  // - HTML markers вмикаємо лише на близькому зумі + top-N
+  // =========================================================
+  const RES_LOD = {
+    html_min_zoom: 2.6,
+    budget(z) {
+      // під 2.6: 0 (тільки glow/core)
+      if (z < 2.6) return 0;
+      if (z < 3.2) return 220;
+      if (z < 4.0) return 450;
+      return 900;
+    }
+  };
+
+  let RES_MARKERS_ENABLED = false;
+  let RES_LAST_BUCKET = -1;
+  let RES_LodRAF = 0;
+
   function makeResourceElement(type, name, strength) {
     const meta = RESOURCE_META[type] || { icon: "✨", color: "rgba(255,255,255,1)" };
 
@@ -520,11 +541,41 @@
     });
   }
 
-  function addResourceMarkers() {
+  // ---------- LOD (HTML markers) ----------
+  function clearResourceMarkers() {
+    for (const rm of resourceMarkers) rm.marker.remove();
+    resourceMarkers.length = 0;
+    RES_MARKERS_ENABLED = false;
+  }
+
+  function resourceScore(f) {
+    const p = f?.properties || {};
+    const strength = Number(p.strength) || 0;
+    const type = String(p.type || "");
+
+    // трішки підсвітимо “цінні” (показуватимуться частіше в top-N)
+    const w =
+      (type === "uranium" || type === "rare" || type === "gold") ? 1.35 :
+      (type === "oil" || type === "gas") ? 1.20 :
+      (type === "iron" || type === "coal") ? 1.05 :
+      1.0;
+
+    return strength * w;
+  }
+
+  function selectTopResourcesForMarkers(limit) {
+    if (!limit || limit <= 0) return [];
+    const feats = (RESOURCES && Array.isArray(RESOURCES.features)) ? RESOURCES.features.slice() : [];
+    // Сортування робимо НЕ кожен кадр — лише при зміні bucket-а зума
+    feats.sort((a, b) => resourceScore(b) - resourceScore(a));
+    return feats.slice(0, limit);
+  }
+
+  function rebuildResourceMarkers(features) {
     for (const rm of resourceMarkers) rm.marker.remove();
     resourceMarkers.length = 0;
 
-    for (const f of RESOURCES.features) {
+    for (const f of (features || [])) {
       const [lng, lat] = f.geometry.coordinates;
       const el = makeResourceElement(f.properties.type, f.properties.name, f.properties.strength);
       const marker = new maplibregl.Marker({ element: el, anchor: "center" })
@@ -532,8 +583,46 @@
         .addTo(map);
       resourceMarkers.push({ marker, el });
     }
+
+    RES_MARKERS_ENABLED = true;
     updateMarkerDetail();
     updateBacksideResourcesVisibility();
+  }
+
+  function bucketForZoom(z) {
+    if (z < 2.6) return 0;
+    if (z < 3.2) return 1;
+    if (z < 4.0) return 2;
+    return 3;
+  }
+
+  function applyResourcesLOD(force = false) {
+    const z = map.getZoom();
+    const b = bucketForZoom(z);
+
+    if (!force && b === RES_LAST_BUCKET) {
+      if (RES_MARKERS_ENABLED) updateBacksideResourcesVisibility();
+      return;
+    }
+    RES_LAST_BUCKET = b;
+
+    const budget = RES_LOD.budget(z);
+
+    if (budget <= 0) {
+      if (RES_MARKERS_ENABLED) clearResourceMarkers();
+      return;
+    }
+
+    const top = selectTopResourcesForMarkers(budget);
+    rebuildResourceMarkers(top);
+  }
+
+  function scheduleResourcesLOD(force = false) {
+    if (RES_LodRAF) return;
+    RES_LodRAF = requestAnimationFrame(() => {
+      RES_LodRAF = 0;
+      applyResourcesLOD(force);
+    });
   }
 
   function updateMarkerDetail() {
@@ -559,6 +648,8 @@
   }
 
   function updateBacksideResourcesVisibility() {
+    if (!RES_MARKERS_ENABLED) return;
+
     const z = map.getZoom();
     const shouldCull = z >= 2.2;
 
@@ -581,6 +672,9 @@
     const j = await r.json().catch(() => ({}));
     if (j.ok && j.data) RESOURCES = j.data;
     if (map.getSource("resources")) map.getSource("resources").setData(RESOURCES);
+
+    // після оновлення даних — перебудувати LOD
+    scheduleResourcesLOD(true);
   }
 
   // ---- Countries (MMO) ----
@@ -1199,7 +1293,8 @@
 
     await loadResources();
     addResourceLayers();
-    addResourceMarkers();
+    // ✅ LOD: HTML markers лише по zoom
+    scheduleResourcesLOD(true);
 
     await loadCountries();
     addCountriesLayers();
@@ -1232,6 +1327,9 @@
     updateMarkerDetail();
     updateBacksideResourcesVisibility();
     updateBacksideFactoriesVisibility();
+
+    // ✅ LOD: реагуємо на зміну зума / рух
+    scheduleResourcesLOD(false);
 
     // NEW: green/red preview while drafting
     if (mode === "create_country" && e && e.lngLat) {

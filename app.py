@@ -6,6 +6,7 @@
 import os
 import json
 import math
+import random  # ✅ NEW
 import logging
 from datetime import datetime
 from urllib.parse import urljoin
@@ -202,7 +203,12 @@ def compute_country_cost(area_km2: float) -> int:
 # ---------------------------
 # Resources & Blueprints
 # ---------------------------
-RESOURCE_NODES = [
+# ✅ NEW: scalable deterministic resources (does NOT break old logic)
+RESOURCE_PER_BASE = int(os.getenv("RESOURCE_PER_BASE", "60"))          # extra nodes per base point
+RESOURCE_SPREAD_DEG = float(os.getenv("RESOURCE_SPREAD_DEG", "2.2"))   # random offset spread
+RESOURCE_SEED = int(os.getenv("RESOURCE_SEED", "42"))                  # stable across restarts
+
+RESOURCE_NODES_BASE = [
     {"type": "oil", "name": "Oil Basin", "lng": 50.5, "lat": 24.0, "strength": 0.95},
     {"type": "oil", "name": "Oil Field", "lng": 44.0, "lat": 30.0, "strength": 0.78},
     {"type": "oil", "name": "Oil Sands", "lng": -113.5, "lat": 56.0, "strength": 0.66},
@@ -240,6 +246,54 @@ RESOURCE_NODES = [
     {"type": "hydro", "name": "Hydro Potential", "lng": 85.0, "lat": 28.0, "strength": 0.78},
     {"type": "geo", "name": "Geothermal", "lng": -21.9, "lat": 64.9, "strength": 0.64},
 ]
+
+def _clamp(v, a, b):
+    return max(a, min(b, v))
+
+def _wrap_lng(lng):
+    # normalize to [-180, 180]
+    while lng > 180:
+        lng -= 360
+    while lng < -180:
+        lng += 360
+    return lng
+
+def expand_resource_nodes(base_nodes, per_base=60, spread_deg=2.2, seed=42):
+    """
+    Generate many resource nodes around each base point.
+    Deterministic via seed => stable between restarts.
+    """
+    rnd = random.Random(seed)
+    out = []
+    for n in base_nodes:
+        out.append(dict(n))  # keep original
+
+        for _ in range(per_base):
+            dlng = rnd.uniform(-spread_deg, spread_deg)
+            dlat = rnd.uniform(-spread_deg, spread_deg)
+
+            lng = _wrap_lng(float(n["lng"]) + dlng)
+            lat = _clamp(float(n["lat"]) + dlat, -85, 85)
+
+            # strength variation but not too low
+            s = _clamp(float(n.get("strength", 0.6)) + rnd.uniform(-0.18, 0.18), 0.35, 1.0)
+
+            out.append({
+                "type": n["type"],
+                "name": n.get("name") or n["type"],
+                "lng": round(lng, 5),
+                "lat": round(lat, 5),
+                "strength": round(s, 2)
+            })
+    return out
+
+# ✅ This is used everywhere as before (/api/resources, factories checks, etc.)
+RESOURCE_NODES = expand_resource_nodes(
+    RESOURCE_NODES_BASE,
+    per_base=RESOURCE_PER_BASE,
+    spread_deg=RESOURCE_SPREAD_DEG,
+    seed=RESOURCE_SEED
+)
 
 FACTORY_BLUEPRINTS = {
     "steel_mill": {"name": "Steel Mill", "icon": "🏗️", "desc": "Iron+Coal → profit", "build_cost": 900, "upkeep": 0, "base_income_per_hour": 70, "requires": {"iron": 1, "coal": 1}},
