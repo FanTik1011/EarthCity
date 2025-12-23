@@ -1,7 +1,7 @@
 // static/js/map.js
 // EarthCity — Globe + Resources(server, LOD) + Countries + Create Country + Factories(server)
 // + land-only countries (green/red zones) + no country-on-country placement + live cost while drafting
-// + LOD: ресурси у базі можуть бути багато, але на мапі красиво (HTML markers тільки на близькому зумі + grid server)
+// + PERF: HTML markers only when few points + heavy HUD updates throttled (RAF)
 
 (function () {
   const $ = (id) => document.getElementById(id);
@@ -140,7 +140,7 @@
   };
 
   let MY_COINS = 0;
-  let ME = { authenticated: false, username: null, has_country: false };
+  let ME = { authenticated: false, username: null, has_country: false, is_confirmed: false };
 
   async function loadRules() {
     const r = await fetch("/api/rules", { credentials: "include" });
@@ -154,7 +154,6 @@
     ME = j || { authenticated:false };
 
     MY_COINS = (j && typeof j.coins === "number") ? j.coins : 0;
-
     if (myCoinsEl) myCoinsEl.textContent = `${MY_COINS} EC`;
     if (myCoinsModalEl) myCoinsModalEl.textContent = `${MY_COINS} EC`;
   }
@@ -286,9 +285,7 @@
   // =========================================================
   // Country-on-country overlap check (client-side)
   // =========================================================
-  function orient(a, b, c) {
-    return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]);
-  }
+  function orient(a, b, c) { return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]); }
   function onSegment(a, b, c) {
     return (Math.min(a[0], b[0]) <= c[0] && c[0] <= Math.max(a[0], b[0]) &&
             Math.min(a[1], b[1]) <= c[1] && c[1] <= Math.max(a[1], b[1]));
@@ -309,7 +306,6 @@
 
     return false;
   }
-
   function ringsIntersect(ringAClosed, ringBClosed) {
     if (!ringAClosed || !ringBClosed) return false;
     const A = ringAClosed.slice(0, -1);
@@ -323,10 +319,8 @@
         if (segmentsIntersect(p1, p2, q1, q2)) return true;
       }
     }
-
     if (pointInRing(B[0][0], B[0][1], ringAClosed)) return true;
     if (pointInRing(A[0][0], A[0][1], ringBClosed)) return true;
-
     return false;
   }
 
@@ -334,7 +328,6 @@
     if (draftPoints.length < 3) return false;
     const ring = draftPoints.map(p => [p.lng, p.lat]);
     const closed = ring.concat([ring[0]]);
-
     const feats = (countriesFC && countriesFC.features) ? countriesFC.features : [];
     for (const f of feats) {
       const g = f && f.geometry;
@@ -352,7 +345,6 @@
 
   function addDraftPreviewLayer() {
     if (map.getSource("draftPreview")) return;
-
     map.addSource("draftPreview", { type: "geojson", data: DRAFT_PREVIEW });
 
     map.addLayer({
@@ -398,9 +390,10 @@
   }
 
   // =========================================================
-  // RESOURCES (server) + LOD
+  // RESOURCES (server) + LOD + PERF
   // =========================================================
   let RESOURCES = { type:"FeatureCollection", features: [] };
+
   const RESOURCE_META = {
     oil:      { icon: "🛢️", color: "rgba(250, 204, 21, 1)" },
     gas:      { icon: "🔥",  color: "rgba(251, 146, 60, 1)" },
@@ -420,29 +413,44 @@
 
   const resourceMarkers = []; // { marker, el }
   let RESOURCE_MARKERS_ENABLED = false;
+  let __lastResKey = "";
 
+  // Smaller resource name/percent (requested)
   function makeResourceElement(type, name, strength) {
     const meta = RESOURCE_META[type] || { icon: "✨", color: "rgba(255,255,255,1)" };
 
     const wrap = document.createElement("div");
     wrap.className = "resource-marker";
 
+    // make it a bit smaller than before
+    wrap.style.padding = "6px 9px";
+    wrap.style.gap = "8px";
+
     const dot = document.createElement("div");
     dot.className = "resource-dot";
     dot.style.background = meta.color;
-    dot.style.boxShadow = `0 0 18px ${meta.color.replace("1)", "0.35)")}`;
+    dot.style.boxShadow = `0 0 14px ${meta.color.replace("1)", "0.30)")}`;
 
     const ico = document.createElement("div");
     ico.className = "resource-ico";
     ico.textContent = meta.icon;
+    ico.style.fontSize = "15px"; // smaller icon
 
     const label = document.createElement("div");
     label.className = "resource-name";
-    label.textContent = name || type;
+    label.textContent = (name || type);
+    label.style.fontSize = "11px";  // ✅ smaller name
+    label.style.lineHeight = "1.05";
+    label.style.maxWidth = "120px";
+    label.style.whiteSpace = "nowrap";
+    label.style.overflow = "hidden";
+    label.style.textOverflow = "ellipsis";
 
     const st = document.createElement("div");
     st.className = "resource-strength";
     st.textContent = `${Math.round((Number(strength) || 0) * 100)}%`;
+    st.style.fontSize = "10px"; // ✅ smaller percent
+    st.style.opacity = "0.92";
 
     wrap.appendChild(dot);
     wrap.appendChild(ico);
@@ -491,7 +499,7 @@
       type: "circle",
       source: "resources",
       paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 2.2, 3, 4.2, 6, 7.2],
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 2.0, 3, 3.6, 6, 6.4],
         "circle-color": ["match", ["get", "type"],
           "oil", "rgba(250,204,21,1)",
           "gas", "rgba(251,146,60,1)",
@@ -509,7 +517,7 @@
           "geo", "rgba(244,63,94,1)",
           "rgba(34,197,94,1)"
         ],
-        "circle-opacity": 0.92,
+        "circle-opacity": 0.90,
         "circle-stroke-color": "rgba(0,0,0,0.42)",
         "circle-stroke-width": 1
       }
@@ -546,6 +554,9 @@
   }
 
   function updateBacksideResourcesVisibility() {
+    if (!RESOURCE_MARKERS_ENABLED) return;
+    if (resourceMarkers.length > 320) return; // safety
+
     const z = map.getZoom();
     const shouldCull = z >= 2.2;
     const center = map.getCenter();
@@ -567,15 +578,16 @@
     const b = map.getBounds();
     const z = map.getZoom();
 
-    const bbox = [
-      b.getWest(), b.getSouth(), b.getEast(), b.getNorth()
-    ].map(v => +v.toFixed(6)).join(",");
+    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
+      .map(v => +v.toFixed(6))
+      .join(",");
 
+    // tuned limits (less points on mid zoom)
     const limit =
-      (z < 2.0) ? 800 :
-      (z < 3.0) ? 1400 :
-      (z < 4.0) ? 2200 :
-      (z < 5.0) ? 3500 : 6000;
+      (z < 2.0) ? 500 :
+      (z < 3.0) ? 900 :
+      (z < 4.0) ? 1400 :
+      (z < 5.0) ? 2200 : 3500;
 
     const r = await fetch(`/api/resources?bbox=${encodeURIComponent(bbox)}&zoom=${encodeURIComponent(z.toFixed(2))}&limit=${limit}`);
     const j = await r.json().catch(() => ({}));
@@ -583,11 +595,16 @@
 
     if (map.getSource("resources")) map.getSource("resources").setData(RESOURCES);
 
-    // HTML markers тільки на близькому зумі, щоб не було сміття
-    const wantHtml = z >= 2.8;
-    setResourceMarkersEnabled(wantHtml);
+    // HTML markers only when few points (DOM is expensive)
+    const featureCount = (RESOURCES.features || []).length;
+    const wantHtml = (z >= 4.2) && (featureCount <= 250);
 
-    if (wantHtml) updateBacksideResourcesVisibility();
+    const key = `${bbox}|${z.toFixed(2)}|${featureCount}|${wantHtml ? 1 : 0}`;
+    if (key !== __lastResKey) {
+      __lastResKey = key;
+      setResourceMarkersEnabled(wantHtml);
+      if (wantHtml) updateBacksideResourcesVisibility();
+    }
   }
 
   // ---- Countries (MMO) ----
@@ -934,8 +951,8 @@
   function factoryIconEl(icon, name, level) {
     const el = document.createElement("div");
     el.className = "resource-marker";
-    el.style.padding = "7px 11px";
-    el.style.gap = "10px";
+    el.style.padding = "7px 10px";
+    el.style.gap = "9px";
 
     const dot = document.createElement("div");
     dot.className = "resource-dot";
@@ -945,14 +962,22 @@
     const ico = document.createElement("div");
     ico.className = "resource-ico";
     ico.textContent = icon || "🏭";
+    ico.style.fontSize = "15px";
 
     const label = document.createElement("div");
     label.className = "resource-name";
     label.textContent = name || "Factory";
+    label.style.fontSize = "11px";
+    label.style.maxWidth = "130px";
+    label.style.whiteSpace = "nowrap";
+    label.style.overflow = "hidden";
+    label.style.textOverflow = "ellipsis";
 
     const st = document.createElement("div");
     st.className = "resource-strength";
     st.textContent = `Lv ${level || 1}`;
+    st.style.fontSize = "10px";
+    st.style.opacity = "0.9";
 
     el.appendChild(dot);
     el.appendChild(ico);
@@ -1212,7 +1237,6 @@
     await refreshMe();
     await loadLand();
 
-    // resources: layers first, then LOD fetch
     addResourceLayers();
     await loadResourcesLOD();
 
@@ -1231,30 +1255,37 @@
     map.resize();
     updateStarsVisibility(map);
     updateMarkerDetail();
-    updateBacksideResourcesVisibility();
+    if (RESOURCE_MARKERS_ENABLED) updateBacksideResourcesVisibility();
     updateBacksideFactoriesVisibility();
     updateDraftEconomyUI(true);
   });
 
-  // ---- HUD updates ----
+  // ---- HUD updates (PERF) ----
   function fmt(n) { return (Math.round(n * 1000) / 1000).toFixed(3); }
 
-  function updateHUD(e) {
+  // light updates on mousemove, heavy updates on move/zoom via RAF
+  let hudRAF = 0;
+
+  function updateHUDLight(e) {
     if (coordsEl && e && e.lngLat) coordsEl.textContent = `${fmt(e.lngLat.lng)}, ${fmt(e.lngLat.lat)}`;
-    if (zoomEl) zoomEl.textContent = `Zoom ${map.getZoom().toFixed(2)}`;
-
-    updateStarsVisibility(map);
-    updateMarkerDetail();
-    if (RESOURCE_MARKERS_ENABLED) updateBacksideResourcesVisibility();
-    updateBacksideFactoriesVisibility();
-
     if (mode === "create_country" && e && e.lngLat) setDraftPreview(e.lngLat.lng, e.lngLat.lat);
-    else setDraftPreview(0, 0);
   }
 
-  map.on("mousemove", updateHUD);
-  map.on("move", updateHUD);
-  map.on("zoom", updateHUD);
+  function scheduleHUDHeavy() {
+    if (hudRAF) return;
+    hudRAF = requestAnimationFrame(() => {
+      hudRAF = 0;
+      if (zoomEl) zoomEl.textContent = `Zoom ${map.getZoom().toFixed(2)}`;
+      updateStarsVisibility(map);
+      updateMarkerDetail();
+      if (RESOURCE_MARKERS_ENABLED) updateBacksideResourcesVisibility();
+      updateBacksideFactoriesVisibility();
+    });
+  }
+
+  map.on("mousemove", updateHUDLight);
+  map.on("move", scheduleHUDHeavy);
+  map.on("zoom", scheduleHUDHeavy);
 
   map.scrollZoom.enable();
   map.dragRotate.enable();
@@ -1265,7 +1296,7 @@
   let resT = null;
   function scheduleResourcesReload() {
     clearTimeout(resT);
-    resT = setTimeout(() => { loadResourcesLOD().catch(()=>{}); }, 180);
+    resT = setTimeout(() => { loadResourcesLOD().catch(()=>{}); }, 200);
   }
   map.on("moveend", scheduleResourcesReload);
   map.on("zoomend", scheduleResourcesReload);
