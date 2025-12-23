@@ -1,7 +1,7 @@
 # app.py
-# EarthCity — single-file Flask app (no .env required)
+# EarthCity — env/.env ready (local) + Heroku ready (Config Vars)
 # Local:  python app.py
-# Heroku/Render: gunicorn app:app
+# Heroku: gunicorn app:app
 
 import os
 import json
@@ -23,6 +23,15 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import text as sa_text
 
+# NEW: load .env locally (Heroku ignores .env by default)
+from dotenv import load_dotenv
+
+
+# ---------------------------
+# Load env
+# ---------------------------
+load_dotenv()  # reads .env if exists
+
 
 # ---------------------------
 # HARD-CODE ADMIN (email only)
@@ -40,28 +49,22 @@ log = logging.getLogger("earthcity")
 
 
 # ---------------------------
-# Economy constants (defaults in code; env can override)
+# Economy constants
 # ---------------------------
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except Exception:
-        return default
+START_COINS = int(os.getenv("START_COINS", "5000"))
 
-START_COINS = _env_int("START_COINS", 5000)
+COUNTRY_BASE_COST = int(os.getenv("COUNTRY_BASE_COST", "800"))
+COUNTRY_COST_PER_1000_KM2 = int(os.getenv("COUNTRY_COST_PER_1000_KM2", "35"))
+COUNTRY_MAX_AREA_KM2 = int(os.getenv("COUNTRY_MAX_AREA_KM2", "250000"))
+COUNTRY_MAX_POINTS = int(os.getenv("COUNTRY_MAX_POINTS", "60"))
+COUNTRY_MIN_POINTS = int(os.getenv("COUNTRY_MIN_POINTS", "3"))
 
-COUNTRY_BASE_COST = _env_int("COUNTRY_BASE_COST", 800)
-COUNTRY_COST_PER_1000_KM2 = _env_int("COUNTRY_COST_PER_1000_KM2", 35)
-COUNTRY_MAX_AREA_KM2 = _env_int("COUNTRY_MAX_AREA_KM2", 250000)
-COUNTRY_MAX_POINTS = _env_int("COUNTRY_MAX_POINTS", 60)
-COUNTRY_MIN_POINTS = _env_int("COUNTRY_MIN_POINTS", 3)
+FACTORY_PLACE_FEE = int(os.getenv("FACTORY_PLACE_FEE", "120"))
+FACTORY_MAX_PER_COUNTRY = int(os.getenv("FACTORY_MAX_PER_COUNTRY", "40"))
+FACTORY_ACCUM_CAP_HOURS = int(os.getenv("FACTORY_ACCUM_CAP_HOURS", "72"))
+FACTORY_PICK_RADIUS_KM = int(os.getenv("FACTORY_PICK_RADIUS_KM", "120"))
 
-FACTORY_PLACE_FEE = _env_int("FACTORY_PLACE_FEE", 120)
-FACTORY_MAX_PER_COUNTRY = _env_int("FACTORY_MAX_PER_COUNTRY", 40)
-FACTORY_ACCUM_CAP_HOURS = _env_int("FACTORY_ACCUM_CAP_HOURS", 72)
-FACTORY_PICK_RADIUS_KM = _env_int("FACTORY_PICK_RADIUS_KM", 120)
-
-TOKEN_MAX_AGE_SECONDS = _env_int("TOKEN_MAX_AGE_SECONDS", 60 * 60 * 24)
+TOKEN_MAX_AGE_SECONDS = int(os.getenv("TOKEN_MAX_AGE_SECONDS", str(60 * 60 * 24)))
 
 
 def _normalize_db_url(raw: str) -> str:
@@ -73,23 +76,27 @@ def _normalize_db_url(raw: str) -> str:
 
 
 # ---------------------------
-# App config (defaults in code; env can override)
+# App config
 # ---------------------------
 app = Flask(__name__)
+
+# If behind proxy (Heroku), this fixes https + host
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev_change_me__PLEASE_SET")
-app.config["SECURITY_SALT"] = os.getenv("SECURITY_SALT", "dev_salt_change_me__PLEASE_SET")
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev_change_me")
+app.config["SECURITY_SALT"] = os.getenv("SECURITY_SALT", "dev_salt_change_me")
 
 app.config["SQLALCHEMY_DATABASE_URI"] = _normalize_db_url(os.getenv("DATABASE_URL", "sqlite:///app.db"))
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
+# Generate external links with https (important for confirm links on Heroku)
 app.config["PREFERRED_URL_SCHEME"] = os.getenv("PREFERRED_URL_SCHEME", "https")
 
+# Cookies (good for https hosting)
 app.config["SESSION_COOKIE_SAMESITE"] = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
 app.config["SESSION_COOKIE_SECURE"] = os.getenv("SESSION_COOKIE_SECURE", "1") == "1"
 
-# Mail (Gmail SMTP or any)
+# Mail (Gmail)
 app.config["MAIL_SERVER"] = os.getenv("MAIL_SERVER", "smtp.gmail.com")
 app.config["MAIL_PORT"] = int(os.getenv("MAIL_PORT", "587"))
 app.config["MAIL_USE_TLS"] = os.getenv("MAIL_USE_TLS", "1") == "1"
@@ -101,7 +108,8 @@ app.config["MAIL_DEFAULT_SENDER"] = os.getenv(
     app.config["MAIL_USERNAME"] or "no-reply@example.com"
 )
 
-# Optional: force public base url
+# If you want to force a specific public base URL (optional)
+# Example: https://earthcity-xxxxx.herokuapp.com
 app.config["PUBLIC_BASE_URL"] = os.getenv("PUBLIC_BASE_URL", "").strip()
 
 
@@ -116,7 +124,10 @@ login_manager.login_view = None
 
 
 def auto_promote_admin(user):
-    """Auto admin if email is in HARDCODE_ADMIN_EMAILS."""
+    """
+    Make user admin automatically if their email is in HARDCODE_ADMIN_EMAILS.
+    Safe: affects only your email(s).
+    """
     try:
         if not user or not getattr(user, "email", None):
             return
@@ -133,6 +144,7 @@ def auto_promote_admin(user):
 def rad(d: float) -> float:
     return d * math.pi / 180.0
 
+
 def haversine_km(lng1, lat1, lng2, lat2) -> float:
     R = 6371.0088
     dlat = rad(lat2 - lat1)
@@ -140,6 +152,7 @@ def haversine_km(lng1, lat1, lng2, lat2) -> float:
     a = math.sin(dlat / 2) ** 2 + math.cos(rad(lat1)) * math.cos(rad(lat2)) * math.sin(dlng / 2) ** 2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
+
 
 def point_in_polygon(lng: float, lat: float, ring) -> bool:
     if not ring or len(ring) < 4:
@@ -155,6 +168,7 @@ def point_in_polygon(lng: float, lat: float, ring) -> bool:
             inside = not inside
         j = i
     return inside
+
 
 def polygon_area_km2_equirect(geom: dict) -> float:
     R = 6371.0088
@@ -180,6 +194,7 @@ def polygon_area_km2_equirect(geom: dict) -> float:
 
     return abs(s) / 2.0
 
+
 def compute_country_cost(area_km2: float) -> int:
     return int(round(COUNTRY_BASE_COST + (area_km2 / 1000.0) * COUNTRY_COST_PER_1000_KM2))
 
@@ -192,7 +207,6 @@ RESOURCE_NODES = [
     {"type": "oil", "name": "Oil Field", "lng": 44.0, "lat": 30.0, "strength": 0.78},
     {"type": "oil", "name": "Oil Sands", "lng": -113.5, "lat": 56.0, "strength": 0.66},
     {"type": "oil", "name": "Offshore Oil", "lng": 6.5, "lat": 53.2, "strength": 0.71},
-
     {"type": "gas", "name": "Gas Field", "lng": 56.0, "lat": 25.5, "strength": 0.86},
     {"type": "gas", "name": "Gas Field", "lng": 36.0, "lat": 31.0, "strength": 0.72},
     {"type": "gas", "name": "Gas Field", "lng": 65.0, "lat": 39.0, "strength": 0.77},
@@ -201,15 +215,11 @@ RESOURCE_NODES = [
     {"type": "iron", "name": "Iron Ore", "lng": 32.2, "lat": 47.8, "strength": 0.88},
     {"type": "iron", "name": "Iron Deposit", "lng": 107.0, "lat": 52.0, "strength": 0.67},
     {"type": "iron", "name": "Iron Ore", "lng": -74.0, "lat": 5.0, "strength": 0.70},
-
     {"type": "gold", "name": "Gold", "lng": -2.0, "lat": 7.0, "strength": 0.72},
     {"type": "gold", "name": "Gold", "lng": 120.5, "lat": -3.0, "strength": 0.60},
-
     {"type": "rare", "name": "Rare Minerals", "lng": 28.0, "lat": -3.0, "strength": 0.78},
     {"type": "rare", "name": "Rare Minerals", "lng": 103.0, "lat": 26.0, "strength": 0.70},
-
     {"type": "uranium", "name": "Uranium", "lng": 133.0, "lat": -22.0, "strength": 0.72},
-
     {"type": "coal", "name": "Coal", "lng": 24.5, "lat": 49.5, "strength": 0.82},
     {"type": "coal", "name": "Coal", "lng": 88.0, "lat": 23.0, "strength": 0.70},
     {"type": "coal", "name": "Coal", "lng": 147.0, "lat": -33.0, "strength": 0.66},
@@ -217,34 +227,30 @@ RESOURCE_NODES = [
     {"type": "water", "name": "Fresh Water", "lng": 90.0, "lat": 23.8, "strength": 0.90},
     {"type": "water", "name": "Fresh Water", "lng": 30.5, "lat": -1.3, "strength": 0.76},
     {"type": "water", "name": "Fresh Water", "lng": 137.0, "lat": 36.0, "strength": 0.74},
-
     {"type": "farmland", "name": "Farmland", "lng": 31.2, "lat": 49.2, "strength": 0.88},
     {"type": "farmland", "name": "Farmland", "lng": 10.5, "lat": 50.7, "strength": 0.74},
     {"type": "farmland", "name": "Farmland", "lng": -58.0, "lat": -34.5, "strength": 0.66},
-
     {"type": "fish", "name": "Fishing Zone", "lng": 142.0, "lat": 41.5, "strength": 0.72},
     {"type": "fish", "name": "Fishing Zone", "lng": 16.0, "lat": 55.5, "strength": 0.68},
 
     {"type": "wind", "name": "Wind Zone", "lng": 8.0, "lat": 56.0, "strength": 0.75},
     {"type": "wind", "name": "Wind Zone", "lng": 145.0, "lat": -35.0, "strength": 0.73},
-
     {"type": "solar", "name": "Solar", "lng": 25.0, "lat": 23.0, "strength": 0.86},
     {"type": "solar", "name": "Solar", "lng": -112.0, "lat": 34.0, "strength": 0.78},
-
     {"type": "hydro", "name": "Hydro Potential", "lng": 85.0, "lat": 28.0, "strength": 0.78},
     {"type": "geo", "name": "Geothermal", "lng": -21.9, "lat": 64.9, "strength": 0.64},
 ]
 
 FACTORY_BLUEPRINTS = {
-    "steel_mill":   {"name": "Steel Mill",   "icon": "🏗️", "desc": "Iron+Coal → profit", "build_cost": 900,  "upkeep": 0, "base_income_per_hour": 70,  "requires": {"iron": 1, "coal": 1}},
-    "oil_refinery": {"name": "Oil Refinery", "icon": "🛢️", "desc": "Oil → money",        "build_cost": 1100, "upkeep": 0, "base_income_per_hour": 95,  "requires": {"oil": 1}},
-    "gas_plant":    {"name": "Gas Plant",    "icon": "🔥",  "desc": "Gas → profit",       "build_cost": 980,  "upkeep": 0, "base_income_per_hour": 82,  "requires": {"gas": 1}},
-    "hydro_plant":  {"name": "Hydro Plant",  "icon": "🌊", "desc": "Hydro → profit",     "build_cost": 950,  "upkeep": 0, "base_income_per_hour": 78,  "requires": {"hydro": 1}},
-    "farm_complex": {"name": "Farm Complex", "icon": "🌾", "desc": "Farmland → profit",  "build_cost": 650,  "upkeep": 0, "base_income_per_hour": 52,  "requires": {"farmland": 1}},
-    "waterworks":   {"name": "Waterworks",   "icon": "💧", "desc": "Water → profit",     "build_cost": 720,  "upkeep": 0, "base_income_per_hour": 50,  "requires": {"water": 1}},
-    "rare_lab":     {"name": "Rare Lab",     "icon": "💎", "desc": "Rare → big profit",  "build_cost": 1400, "upkeep": 0, "base_income_per_hour": 130, "requires": {"rare": 1}},
-    "gold_mint":    {"name": "Gold Mint",    "icon": "🪙", "desc": "Gold → big profit",  "build_cost": 1350, "upkeep": 0, "base_income_per_hour": 125, "requires": {"gold": 1}},
-    "shipyard":     {"name": "Shipyard",     "icon": "⚓", "desc": "Fish → profit",      "build_cost": 1000, "upkeep": 0, "base_income_per_hour": 88,  "requires": {"fish": 1}},
+    "steel_mill": {"name": "Steel Mill", "icon": "🏗️", "desc": "Iron+Coal → profit", "build_cost": 900, "upkeep": 0, "base_income_per_hour": 70, "requires": {"iron": 1, "coal": 1}},
+    "oil_refinery": {"name": "Oil Refinery", "icon": "🛢️", "desc": "Oil → money", "build_cost": 1100, "upkeep": 0, "base_income_per_hour": 95, "requires": {"oil": 1}},
+    "gas_plant": {"name": "Gas Plant", "icon": "🔥", "desc": "Gas → profit", "build_cost": 980, "upkeep": 0, "base_income_per_hour": 82, "requires": {"gas": 1}},
+    "hydro_plant": {"name": "Hydro Plant", "icon": "🌊", "desc": "Hydro → profit", "build_cost": 950, "upkeep": 0, "base_income_per_hour": 78, "requires": {"hydro": 1}},
+    "farm_complex": {"name": "Farm Complex", "icon": "🌾", "desc": "Farmland → profit", "build_cost": 650, "upkeep": 0, "base_income_per_hour": 52, "requires": {"farmland": 1}},
+    "waterworks": {"name": "Waterworks", "icon": "💧", "desc": "Water → profit", "build_cost": 720, "upkeep": 0, "base_income_per_hour": 50, "requires": {"water": 1}},
+    "rare_lab": {"name": "Rare Lab", "icon": "💎", "desc": "Rare → big profit", "build_cost": 1400, "upkeep": 0, "base_income_per_hour": 130, "requires": {"rare": 1}},
+    "gold_mint": {"name": "Gold Mint", "icon": "🪙", "desc": "Gold → big profit", "build_cost": 1350, "upkeep": 0, "base_income_per_hour": 125, "requires": {"gold": 1}},
+    "shipyard": {"name": "Shipyard", "icon": "⚓", "desc": "Fish → profit", "build_cost": 1000, "upkeep": 0, "base_income_per_hour": 88, "requires": {"fish": 1}},
 }
 
 
@@ -260,8 +266,10 @@ class User(db.Model, UserMixin):
     confirmed_at = db.Column(db.DateTime, nullable=True)
     coins = db.Column(db.Integer, default=START_COINS, nullable=False)
 
+    # starter bonus lock
     starter_granted = db.Column(db.Boolean, default=True, nullable=False)
 
+    # Admin / Block
     is_admin = db.Column(db.Boolean, default=False, nullable=False)
     is_blocked = db.Column(db.Boolean, default=False, nullable=False)
     blocked_reason = db.Column(db.String(255), nullable=True)
@@ -377,11 +385,14 @@ def _kick_blocked_users():
 def _serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(secret_key=app.config["SECRET_KEY"], salt=app.config["SECURITY_SALT"])
 
+
 def make_confirm_token(user: User) -> str:
     return _serializer().dumps({"uid": user.id, "email": user.email})
 
+
 def parse_confirm_token(token: str):
     return _serializer().loads(token, max_age=TOKEN_MAX_AGE_SECONDS)
+
 
 def absolute_url(path: str) -> str:
     base = (app.config.get("PUBLIC_BASE_URL") or "").rstrip("/")
@@ -392,6 +403,7 @@ def absolute_url(path: str) -> str:
     if base2.startswith("http://"):
         base2 = base2.replace("http://", "https://", 1)
     return urljoin(base2, path.lstrip("/"))
+
 
 def send_confirmation_email(user: User) -> dict:
     token = make_confirm_token(user)
@@ -423,12 +435,14 @@ def send_confirmation_email(user: User) -> dict:
 def globe_page():
     return render_template("globe_auth.html")
 
+
 @app.get("/admin")
 @login_required
 def admin_page():
     if not getattr(current_user, "is_admin", False):
         return ("Forbidden", 403)
     return render_template("admin_panel.html")
+
 
 @app.get("/favicon.ico")
 def favicon():
@@ -680,79 +694,10 @@ def api_rules():
     })
 
 
-def _resource_score(n: dict) -> float:
-    t = (n.get("type") or "").strip().lower()
-    s = float(n.get("strength", 0.0) or 0.0)
-    w = 1.0
-    if t in ("uranium", "rare", "gold"):
-        w = 1.35
-    elif t in ("oil", "gas"):
-        w = 1.20
-    elif t in ("iron", "coal"):
-        w = 1.05
-    return s * w
-
-
-def _parse_bbox(bbox_str: str):
-    """
-    bbox: "minLng,minLat,maxLng,maxLat"
-    returns (minLng,minLat,maxLng,maxLat) floats or None
-    """
-    if not bbox_str:
-        return None
-    try:
-        parts = [p.strip() for p in bbox_str.split(",")]
-        if len(parts) != 4:
-            return None
-        min_lng, min_lat, max_lng, max_lat = map(float, parts)
-        # clamp
-        min_lng = max(-180.0, min(180.0, min_lng))
-        max_lng = max(-180.0, min(180.0, max_lng))
-        min_lat = max(-90.0, min(90.0, min_lat))
-        max_lat = max(-90.0, min(90.0, max_lat))
-        return (min_lng, min_lat, max_lng, max_lat)
-    except Exception:
-        return None
-
-
-def _in_bbox(lng: float, lat: float, bbox) -> bool:
-    """
-    Handles normal bbox and antimeridian wrap bbox:
-    - normal: minLng <= maxLng
-    - wrap:   minLng > maxLng (example: 170..-170)
-    """
-    min_lng, min_lat, max_lng, max_lat = bbox
-    if lat < min_lat or lat > max_lat:
-        return False
-
-    if min_lng <= max_lng:
-        return (min_lng <= lng <= max_lng)
-    # wrap-around
-    return (lng >= min_lng) or (lng <= max_lng)
-
-
 @app.get("/api/resources")
 def api_resources():
-    """
-    If bbox is provided, returns resources only inside bbox, limited by max.
-    Example: /api/resources?bbox=minLng,minLat,maxLng,maxLat&max=900
-    If bbox is missing -> returns full dataset (backward compatible).
-    """
-    bbox = _parse_bbox(request.args.get("bbox", "").strip())
-    max_n = int(request.args.get("max", "1200") or 1200)
-    max_n = max(0, min(5000, max_n))
-
-    nodes = RESOURCE_NODES
-
-    if bbox:
-        nodes = [n for n in nodes if _in_bbox(float(n["lng"]), float(n["lat"]), bbox)]
-        # prefer better nodes if need to cut
-        nodes = sorted(nodes, key=_resource_score, reverse=True)
-        if max_n and len(nodes) > max_n:
-            nodes = nodes[:max_n]
-
     fc = {"type": "FeatureCollection", "features": []}
-    for idx, n in enumerate(nodes, start=1):
+    for idx, n in enumerate(RESOURCE_NODES, start=1):
         fc["features"].append({
             "type": "Feature",
             "id": idx,
@@ -848,7 +793,7 @@ def api_countries_create():
     if not _polygon_is_on_land(geom):
         return jsonify(ok=False, error="Країну можна створювати лише на суші (не на морі/океані)."), 400
 
-    # ✅ OVERLAP CHECK
+    # ✅ OVERLAP CHECK (country-on-country)
     if _geom_intersects_any_country(geom):
         return jsonify(ok=False, error="Не можна створювати країну на країні (перетин з іншою країною)."), 400
 
@@ -873,6 +818,7 @@ def api_countries_create():
     db.session.add(country)
     db.session.commit()
 
+    # ✅ IMPORTANT: return response (was missing in your pasted version)
     return jsonify(ok=True, country=country.to_feature(), coins=int(current_user.coins or 0))
 
 
@@ -909,6 +855,7 @@ def _country_polygon_ring(country: Country):
     except Exception:
         return None
 
+
 def _resources_near_point_in_country(country: Country, lng: float, lat: float):
     ring = _country_polygon_ring(country)
     if not ring:
@@ -921,6 +868,7 @@ def _resources_near_point_in_country(country: Country, lng: float, lat: float):
         if haversine_km(lng, lat, n["lng"], n["lat"]) <= FACTORY_PICK_RADIUS_KM:
             near.append(n)
     return near
+
 
 def _calc_factory_rate_per_hour(factory: Factory) -> float:
     bp = FACTORY_BLUEPRINTS.get(factory.blueprint)
@@ -951,11 +899,13 @@ def _calc_factory_rate_per_hour(factory: Factory) -> float:
     lvl_mult = 1.0 + (max(0, level - 1) * 0.22)
     return base * mult * lvl_mult
 
+
 def _accrue_factory(factory: Factory, now: datetime):
     last = factory.last_collected_at or now
     dt_hours = (now - last).total_seconds() / 3600.0
     if dt_hours <= 0:
         return
+
     dt_hours = min(dt_hours, FACTORY_ACCUM_CAP_HOURS)
 
     rate = _calc_factory_rate_per_hour(factory)
@@ -1045,8 +995,12 @@ def api_factory_build():
     near = _resources_near_point_in_country(country, float(lng), float(lat))
     req = bp.get("requires", {})
     missing = []
+
     for rtype, need_count in req.items():
-        found = sum(1 for n in near if n["type"] == rtype)
+        found = 0
+        for n in near:
+            if n["type"] == rtype:
+                found += 1
         if found < int(need_count):
             missing.append(rtype)
 
@@ -1132,6 +1086,10 @@ def api_factory_upgrade(fid: int):
 # Tiny schema ensure for SQLite
 # ---------------------------
 def _ensure_user_columns_sqlite():
+    """
+    SQLite only: add new columns if DB already existed.
+    Safe ALTER TABLE with checks.
+    """
     try:
         cols = [r[1] for r in db.session.execute(sa_text("PRAGMA table_info(user)")).fetchall()]
         alters = []
@@ -1152,6 +1110,7 @@ def _ensure_user_columns_sqlite():
         db.session.rollback()
         log.warning("DB migrate (sqlite) skipped/failed: %s", e)
 
+
 def _ensure_schema():
     uri = (app.config.get("SQLALCHEMY_DATABASE_URI") or "")
     if uri.startswith("sqlite"):
@@ -1162,9 +1121,13 @@ def _ensure_schema():
 # LAND (GeoJSON) + polygon intersection helpers
 # ---------------------------
 LAND_GEOJSON_PATH = os.path.join(app.root_path, "static", "data", "land.geojson")
-LAND_FEATURES = None  # cached
+LAND_FEATURES = None  # cached parsed land polygons
 
 def _load_land_geojson():
+    """
+    Loads land polygons from static/data/land.geojson once.
+    Expected: FeatureCollection of Polygon / MultiPolygon.
+    """
     global LAND_FEATURES
     if LAND_FEATURES is not None:
         return LAND_FEATURES
@@ -1177,7 +1140,9 @@ def _load_land_geojson():
     try:
         with open(LAND_GEOJSON_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-        LAND_FEATURES = data.get("features") or []
+
+        feats = data.get("features") or []
+        LAND_FEATURES = feats
         log.info("Loaded land.geojson features: %d", len(LAND_FEATURES))
         return LAND_FEATURES
     except Exception as e:
@@ -1185,11 +1150,19 @@ def _load_land_geojson():
         LAND_FEATURES = []
         return LAND_FEATURES
 
+
 def _rings_from_geom(geom: dict):
+    """
+    Returns list of rings (each ring is list of [lng,lat] closed),
+    supports Polygon and MultiPolygon.
+    Only outer rings are used (coords[0]).
+    """
     if not geom or not isinstance(geom, dict):
         return []
+
     gtype = geom.get("type")
     coords = geom.get("coordinates")
+
     rings = []
     if gtype == "Polygon":
         if isinstance(coords, list) and coords and isinstance(coords[0], list):
@@ -1206,10 +1179,16 @@ def _rings_from_geom(geom: dict):
                     rings.append(ring)
     return rings
 
+
 def _point_on_land(lng: float, lat: float) -> bool:
+    """
+    True if point is inside ANY land polygon ring.
+    If land.geojson missing/empty -> sea check disabled (ALLOW).
+    """
     feats = _load_land_geojson()
     if not feats:
-        return True  # allow if missing
+        return True  # ✅ do not block creation if file missing
+
     for feat in feats:
         g = (feat or {}).get("geometry") or {}
         for ring in _rings_from_geom(g):
@@ -1217,9 +1196,14 @@ def _point_on_land(lng: float, lat: float) -> bool:
                 return True
     return False
 
+
 def _polygon_is_on_land(geom: dict) -> bool:
+    """
+    Sea rule: require ALL polygon vertices to be on land.
+    (Simple, fast, MVP)
+    """
     ring = (geom.get("coordinates") or [[]])[0]
-    pts = ring[:-1]
+    pts = ring[:-1]  # without closing point
     if not pts:
         return False
     for lng, lat in pts:
@@ -1228,6 +1212,7 @@ def _polygon_is_on_land(geom: dict) -> bool:
     return True
 
 
+# ---- polygon intersection (country-on-country) ----
 def _orient(a, b, c):
     return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])
 
@@ -1252,7 +1237,14 @@ def _segments_intersect(p1, p2, q1, q2) -> bool:
 
     return False
 
+
 def _rings_intersect(ringA, ringB) -> bool:
+    """
+    True if polygons overlap/touch:
+    - any edge intersects
+    - or A contains a vertex of B
+    - or B contains a vertex of A
+    """
     if not ringA or not ringB:
         return False
 
@@ -1277,7 +1269,11 @@ def _rings_intersect(ringA, ringB) -> bool:
 
     return False
 
+
 def _geom_intersects_any_country(new_geom: dict) -> bool:
+    """
+    Checks if new polygon intersects ANY existing country polygon.
+    """
     new_ring = (new_geom.get("coordinates") or [[]])[0]
     if not new_ring:
         return False
@@ -1296,7 +1292,7 @@ def _geom_intersects_any_country(new_geom: dict) -> bool:
 
 
 # ---------------------------
-# Init DB
+# Init DB once per dyno boot
 # ---------------------------
 with app.app_context():
     db.create_all()
