@@ -1,6 +1,7 @@
 // static/js/map.js
-// EarthCity — Globe + Resources(server) + Countries + Create Country + Factories(server)
-// + NEW: land-only countries (green/red zones) + no country-on-country placement + live cost while drafting
+// EarthCity — Globe + Resources(server, LOD) + Countries + Create Country + Factories(server)
+// + land-only countries (green/red zones) + no country-on-country placement + live cost while drafting
+// + LOD: ресурси у базі можуть бути багато, але на мапі красиво (HTML markers тільки на близькому зумі + grid server)
 
 (function () {
   const $ = (id) => document.getElementById(id);
@@ -33,14 +34,14 @@
 
   // Left factory sidebar
   const factorybar = $("factorybar");
-  const fbToggle = $("fbToggle"); // (optional if exists)
+  const fbToggle = $("fbToggle"); // optional
   const fbSub = $("fbSub");
   const fbMsg = $("fbMsg");
   const fbBlueprints = $("fbBlueprints");
   const fbSelected = $("fbSelected");
   const fbMyFactories = $("fbMyFactories");
   const btnFactoryMode = $("btnFactoryMode");
-  const btnCancelFactoryMode = $("btnCancelFactoryMode"); // (optional if exists)
+  const btnCancelFactoryMode = $("btnCancelFactoryMode"); // optional
   const btnTipFactory = $("btnTipFactory");
   const fbTip = $("fbTip");
 
@@ -207,7 +208,7 @@
   map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
 
   // =========================================================
-  // NEW: LAND CHECK (green/red zones) — requires static/data/land.geojson
+  // LAND CHECK (green/red zones) — requires static/data/land.geojson
   // =========================================================
   let LAND = { type: "FeatureCollection", features: [] };
   let LAND_READY = false;
@@ -227,7 +228,6 @@
     }
   }
 
-  // Geometry helpers: supports Polygon + MultiPolygon in land file
   function landRingsFromGeometry(geom) {
     const rings = [];
     if (!geom || typeof geom !== "object") return rings;
@@ -273,7 +273,6 @@
     return false;
   }
 
-  // Rule: all draft vertices must be on land
   function isDraftOnLand() {
     if (!LAND_READY) return null;
     if (!draftPoints.length) return false;
@@ -285,7 +284,7 @@
   }
 
   // =========================================================
-  // NEW: Country-on-country overlap check (client-side)
+  // Country-on-country overlap check (client-side)
   // =========================================================
   function orient(a, b, c) {
     return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]);
@@ -317,7 +316,6 @@
     const B = ringBClosed.slice(0, -1);
     if (A.length < 3 || B.length < 3) return false;
 
-    // edge-edge
     for (let i = 0; i < A.length; i++) {
       const p1 = A[i], p2 = A[(i + 1) % A.length];
       for (let j = 0; j < B.length; j++) {
@@ -326,7 +324,6 @@
       }
     }
 
-    // containment (any vertex)
     if (pointInRing(B[0][0], B[0][1], ringAClosed)) return true;
     if (pointInRing(A[0][0], A[0][1], ringBClosed)) return true;
 
@@ -349,10 +346,9 @@
   }
 
   // =========================================================
-  // NEW: Green/Red preview point marker while drafting
+  // Draft preview point marker (green/red)
   // =========================================================
   const DRAFT_PREVIEW = { type: "FeatureCollection", features: [] };
-  let lastPreview = null; // {lng,lat,onLand}
 
   function addDraftPreviewLayer() {
     if (map.getSource("draftPreview")) return;
@@ -366,8 +362,8 @@
       paint: {
         "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.2, 4.5, 6, 8.0],
         "circle-color": ["case",
-          ["==", ["get", "ok"], 1], "rgba(34,197,94,1)",     // green
-          "rgba(239,68,68,1)"                              // red
+          ["==", ["get", "ok"], 1], "rgba(34,197,94,1)",
+          "rgba(239,68,68,1)"
         ],
         "circle-opacity": 0.92,
         "circle-stroke-color": "rgba(0,0,0,0.55)",
@@ -385,16 +381,13 @@
       return;
     }
 
-    // If land not ready, don't show red/green (avoid lying)
     const onLand = isPointOnLand(lng, lat);
     if (onLand === null) {
-      // clear preview
       DRAFT_PREVIEW.features = [];
       if (map.getSource("draftPreview")) map.getSource("draftPreview").setData(DRAFT_PREVIEW);
       return;
     }
 
-    lastPreview = { lng, lat, onLand };
     DRAFT_PREVIEW.features = [{
       type: "Feature",
       properties: { ok: onLand ? 1 : 0 },
@@ -404,7 +397,9 @@
     if (map.getSource("draftPreview")) map.getSource("draftPreview").setData(DRAFT_PREVIEW);
   }
 
-  // ---- Resources (server) ----
+  // =========================================================
+  // RESOURCES (server) + LOD
+  // =========================================================
   let RESOURCES = { type:"FeatureCollection", features: [] };
   const RESOURCE_META = {
     oil:      { icon: "🛢️", color: "rgba(250, 204, 21, 1)" },
@@ -424,6 +419,7 @@
   };
 
   const resourceMarkers = []; // { marker, el }
+  let RESOURCE_MARKERS_ENABLED = false;
 
   function makeResourceElement(type, name, strength) {
     const meta = RESOURCE_META[type] || { icon: "✨", color: "rgba(255,255,255,1)" };
@@ -524,7 +520,7 @@
     for (const rm of resourceMarkers) rm.marker.remove();
     resourceMarkers.length = 0;
 
-    for (const f of RESOURCES.features) {
+    for (const f of (RESOURCES.features || [])) {
       const [lng, lat] = f.geometry.coordinates;
       const el = makeResourceElement(f.properties.type, f.properties.name, f.properties.strength);
       const marker = new maplibregl.Marker({ element: el, anchor: "center" })
@@ -536,32 +532,22 @@
     updateBacksideResourcesVisibility();
   }
 
-  function updateMarkerDetail() {
-    const z = map.getZoom();
-    for (const rm of resourceMarkers) {
-      if (z < 1.6) {
-        rm.el.classList.add("tiny"); rm.el.classList.remove("small");
-      } else if (z < 2.6) {
-        rm.el.classList.add("small"); rm.el.classList.remove("tiny");
-      } else {
-        rm.el.classList.remove("small"); rm.el.classList.remove("tiny");
-      }
+  function setResourceMarkersEnabled(enabled) {
+    enabled = !!enabled;
+    if (RESOURCE_MARKERS_ENABLED === enabled) return;
+    RESOURCE_MARKERS_ENABLED = enabled;
+
+    if (!enabled) {
+      for (const rm of resourceMarkers) rm.marker.remove();
+      resourceMarkers.length = 0;
+      return;
     }
-    for (const fm of factoryMarkers) {
-      if (z < 1.6) {
-        fm.el.classList.add("tiny"); fm.el.classList.remove("small");
-      } else if (z < 2.6) {
-        fm.el.classList.add("small"); fm.el.classList.remove("tiny");
-      } else {
-        fm.el.classList.remove("small"); fm.el.classList.remove("tiny");
-      }
-    }
+    addResourceMarkers();
   }
 
   function updateBacksideResourcesVisibility() {
     const z = map.getZoom();
     const shouldCull = z >= 2.2;
-
     const center = map.getCenter();
     const clng = center.lng, clat = center.lat;
 
@@ -576,11 +562,32 @@
     }
   }
 
-  async function loadResources() {
-    const r = await fetch("/api/resources");
+  // LOD loader: ask server for current viewport (bbox) and zoom
+  async function loadResourcesLOD() {
+    const b = map.getBounds();
+    const z = map.getZoom();
+
+    const bbox = [
+      b.getWest(), b.getSouth(), b.getEast(), b.getNorth()
+    ].map(v => +v.toFixed(6)).join(",");
+
+    const limit =
+      (z < 2.0) ? 800 :
+      (z < 3.0) ? 1400 :
+      (z < 4.0) ? 2200 :
+      (z < 5.0) ? 3500 : 6000;
+
+    const r = await fetch(`/api/resources?bbox=${encodeURIComponent(bbox)}&zoom=${encodeURIComponent(z.toFixed(2))}&limit=${limit}`);
     const j = await r.json().catch(() => ({}));
     if (j.ok && j.data) RESOURCES = j.data;
+
     if (map.getSource("resources")) map.getSource("resources").setData(RESOURCES);
+
+    // HTML markers тільки на близькому зумі, щоб не було сміття
+    const wantHtml = z >= 2.8;
+    setResourceMarkersEnabled(wantHtml);
+
+    if (wantHtml) updateBacksideResourcesVisibility();
   }
 
   // ---- Countries (MMO) ----
@@ -662,7 +669,6 @@
         selectedCountryId = null;
         if (map.getLayer("countries-selected")) map.setFilter("countries-selected", ["==", ["get", "id"], -1]);
 
-        // hint
         hideFbMsg();
         if (!LAND_READY) showFbMsg("ℹ️ land.geojson not found → sea/ocean restriction disabled on client (server may still block).");
 
@@ -690,7 +696,6 @@
       hideFbMsg();
     }
 
-    // clear preview if leaving mode
     if (mode !== "create_country") setDraftPreview(0, 0);
   }
 
@@ -699,7 +704,6 @@
     DRAFT.features = [];
     if (map.getSource("draft")) map.getSource("draft").setData(DRAFT);
 
-    // clear preview
     DRAFT_PREVIEW.features = [];
     if (map.getSource("draftPreview")) map.getSource("draftPreview").setData(DRAFT_PREVIEW);
   }
@@ -774,7 +778,7 @@
       });
     }
 
-    map.getSource("draft").setData(DRAFT);
+    if (map.getSource("draft")) map.getSource("draft").setData(DRAFT);
     updateDraftEconomyUI();
   }
 
@@ -808,9 +812,8 @@
     const tooMany = draftPoints.length > RULES.country_max_points;
     const tooPoor = MY_COINS < cost;
 
-    // NEW rules
-    const notOnLand = (isDraftOnLand() === false);      // if land ready -> strict
-    const overlaps = draftIntersectsAnyCountry();       // always possible (uses existing countries)
+    const notOnLand = (isDraftOnLand() === false);
+    const overlaps = draftIntersectsAnyCountry();
 
     if (btnFinish) {
       btnFinish.disabled = tooBig || tooMany || tooPoor || notOnLand || overlaps;
@@ -825,7 +828,6 @@
       btnFinish.title = title;
     }
 
-    // Also show user-friendly message in fbMsg (non-spam)
     if (mode === "create_country") {
       if (notOnLand) showFbMsg("🔴 Не можна створювати країну на морі/океані. Став точки на суші (зелена зона).");
       else if (overlaps) showFbMsg("⛔ Не можна створювати країну на країні. Твій полігон перетинає іншу країну.");
@@ -866,7 +868,6 @@
   async function saveCountry() {
     if (draftPoints.length < 3) return;
 
-    // Extra front checks (server will also validate)
     const onLand = isDraftOnLand();
     if (onLand === false) {
       if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Країну можна створювати лише на суші (не на морі/океані)."; }
@@ -932,7 +933,7 @@
 
   function factoryIconEl(icon, name, level) {
     const el = document.createElement("div");
-    el.className = "resource-marker"; // reuse nice style
+    el.className = "resource-marker";
     el.style.padding = "7px 11px";
     el.style.gap = "10px";
 
@@ -969,9 +970,7 @@
 
   function reqToText(req) {
     const parts = [];
-    for (const k of Object.keys(req || {})) {
-      parts.push(`${k}×${req[k]}`);
-    }
+    for (const k of Object.keys(req || {})) parts.push(`${k}×${req[k]}`);
     return parts.join(", ");
   }
 
@@ -1113,11 +1112,15 @@
         </div>
       `;
 
-      row.querySelector('[data-act="fly"]').addEventListener("click", () => {
+      const flyBtn = row.querySelector('[data-act="fly"]');
+      const collectBtn = row.querySelector('[data-act="collect"]');
+      const upgradeBtn = row.querySelector('[data-act="upgrade"]');
+
+      if (flyBtn) flyBtn.addEventListener("click", () => {
         map.flyTo({ center: [f.lng, f.lat], zoom: Math.max(map.getZoom(), 3.0), speed: 1.2 });
       });
 
-      row.querySelector('[data-act="collect"]').addEventListener("click", async () => {
+      if (collectBtn) collectBtn.addEventListener("click", async () => {
         try {
           const res = await postJSON(`/api/factories/${f.id}/collect`, {});
           if (typeof res.coins === "number") MY_COINS = res.coins;
@@ -1129,7 +1132,7 @@
         }
       });
 
-      row.querySelector('[data-act="upgrade"]').addEventListener("click", async () => {
+      if (upgradeBtn) upgradeBtn.addEventListener("click", async () => {
         try {
           const res = await postJSON(`/api/factories/${f.id}/upgrade`, {});
           if (typeof res.coins === "number") MY_COINS = res.coins;
@@ -1146,7 +1149,6 @@
     }
   }
 
-  // helper: pick my country id (since 1 user = 1 country)
   function myCountryIdFromCountriesFC() {
     if (!ME.authenticated) return null;
     const feats = countriesFC.features || [];
@@ -1177,6 +1179,21 @@
     }
   }
 
+  // ---- marker detail LOD ----
+  function updateMarkerDetail() {
+    const z = map.getZoom();
+    for (const rm of resourceMarkers) {
+      if (z < 1.6) { rm.el.classList.add("tiny"); rm.el.classList.remove("small"); }
+      else if (z < 2.6) { rm.el.classList.add("small"); rm.el.classList.remove("tiny"); }
+      else { rm.el.classList.remove("small"); rm.el.classList.remove("tiny"); }
+    }
+    for (const fm of factoryMarkers) {
+      if (z < 1.6) { fm.el.classList.add("tiny"); fm.el.classList.remove("small"); }
+      else if (z < 2.6) { fm.el.classList.add("small"); fm.el.classList.remove("tiny"); }
+      else { fm.el.classList.remove("small"); fm.el.classList.remove("tiny"); }
+    }
+  }
+
   // ---- INIT ----
   map.on("style.load", async () => {
     try { map.setProjection({ type: "globe" }); } catch {}
@@ -1193,13 +1210,11 @@
 
     await loadRules();
     await refreshMe();
-
-    // NEW: load land for sea/land check
     await loadLand();
 
-    await loadResources();
+    // resources: layers first, then LOD fetch
     addResourceLayers();
-    addResourceMarkers();
+    await loadResourcesLOD();
 
     await loadCountries();
     addCountriesLayers();
@@ -1230,15 +1245,11 @@
 
     updateStarsVisibility(map);
     updateMarkerDetail();
-    updateBacksideResourcesVisibility();
+    if (RESOURCE_MARKERS_ENABLED) updateBacksideResourcesVisibility();
     updateBacksideFactoriesVisibility();
 
-    // NEW: green/red preview while drafting
-    if (mode === "create_country" && e && e.lngLat) {
-      setDraftPreview(e.lngLat.lng, e.lngLat.lat);
-    } else {
-      setDraftPreview(0, 0);
-    }
+    if (mode === "create_country" && e && e.lngLat) setDraftPreview(e.lngLat.lng, e.lngLat.lat);
+    else setDraftPreview(0, 0);
   }
 
   map.on("mousemove", updateHUD);
@@ -1250,24 +1261,29 @@
   map.dragPan.enable();
   map.touchZoomRotate.enable();
 
+  // ---- resources refresh (debounced) ----
+  let resT = null;
+  function scheduleResourcesReload() {
+    clearTimeout(resT);
+    resT = setTimeout(() => { loadResourcesLOD().catch(()=>{}); }, 180);
+  }
+  map.on("moveend", scheduleResourcesReload);
+  map.on("zoomend", scheduleResourcesReload);
+
   // Map click
   map.on("click", async (e) => {
-    // Build factory mode
     if (mode === "factory_build") {
       return buildFactoryAt(e.lngLat.lng, e.lngLat.lat);
     }
 
-    // Create country mode
     if (mode !== "create_country") return;
 
-    // Do not allow placing points on existing country
     const feats = map.queryRenderedFeatures(e.point, { layers: ["countries-fill"] });
     if (feats && feats.length) {
       showFbMsg("⛔ Тут уже є країна. Не можна ставити країну на країну.");
       return;
     }
 
-    // Do not allow placing points on sea (if land ready)
     const onLand = isPointOnLand(e.lngLat.lng, e.lngLat.lat);
     if (onLand === false) {
       showFbMsg("🔴 Це море/океан. Став точку на суші (зелена зона).");
@@ -1307,8 +1323,7 @@
     });
   }
 
-  // NOTE: in your HTML you have 2 elements with id="fbClose".
-  // Fix safely: bind close to ALL of them.
+  // NOTE: in your HTML you may have 2 elements with id="fbClose".
   const fbCloseBtns = document.querySelectorAll("#fbClose");
   fbCloseBtns.forEach((b) => {
     b.addEventListener("click", () => {
@@ -1316,7 +1331,6 @@
     });
   });
 
-  // Topbar factories button
   let factoriesPanelOpen = false;
 
   function setFactoriesPanel(open) {
@@ -1361,7 +1375,7 @@
   }
 
   // =========================================================
-  // COUNTRY PANEL + FACTORIES PANEL (your previous add-on block)
+  // COUNTRY PANEL
   // =========================================================
   const countryPanel = document.getElementById("countryPanel");
   const cpClose = document.getElementById("cpClose");
@@ -1410,15 +1424,13 @@
   async function loadCountryDetailsToPanel(countryId) {
     try {
       const r = await fetch(`/api/countries/${countryId}`, { credentials: "include" });
-      const j = await r.json();
+      const j = await r.json().catch(() => ({}));
       if (!j.ok) return;
 
       const d = j.data || {};
       if (cpFactories) cpFactories.textContent = d.factories ?? "0";
       if (cpOwner) cpOwner.textContent = d.owner_username || "—";
-      if (cpSub) {
-        cpSub.textContent = d.is_mine ? "Your country ✅" : "Foreign country";
-      }
+      if (cpSub) cpSub.textContent = d.is_mine ? "Your country ✅" : "Foreign country";
     } catch (e) {
       console.warn("Failed to load country details", e);
     }
@@ -1432,11 +1444,7 @@
       const id = Number(f.properties?.id || -1);
       if (id < 0) return;
 
-      window.__earthMap.setFilter(
-        "countries-selected",
-        ["==", ["get", "id"], id]
-      );
-
+      window.__earthMap.setFilter("countries-selected", ["==", ["get", "id"], id]);
       openCountryPanelBasic(f.properties);
       await loadCountryDetailsToPanel(id);
     });
@@ -1458,12 +1466,8 @@
 
       let lng = 0, lat = 0;
       const pts = ring.slice(0, -1);
-      for (const p of pts) {
-        lng += p[0];
-        lat += p[1];
-      }
-      lng /= pts.length;
-      lat /= pts.length;
+      for (const p of pts) { lng += p[0]; lat += p[1]; }
+      lng /= pts.length; lat /= pts.length;
 
       window.__earthMap.flyTo({
         center: [lng, lat],

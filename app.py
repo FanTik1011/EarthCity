@@ -6,6 +6,7 @@
 import os
 import json
 import math
+import random
 import logging
 from datetime import datetime
 from urllib.parse import urljoin
@@ -200,13 +201,192 @@ def compute_country_cost(area_km2: float) -> int:
 
 
 # ---------------------------
-# Resources & Blueprints
+# LAND (GeoJSON) + polygon intersection helpers
 # ---------------------------
-RESOURCE_NODES = [
+LAND_GEOJSON_PATH = os.path.join(app.root_path, "static", "data", "land.geojson")
+LAND_FEATURES = None  # cached parsed land polygons
+
+
+def _load_land_geojson():
+    """
+    Loads land polygons from static/data/land.geojson once.
+    Expected: FeatureCollection of Polygon / MultiPolygon.
+    """
+    global LAND_FEATURES
+    if LAND_FEATURES is not None:
+        return LAND_FEATURES
+
+    if not os.path.exists(LAND_GEOJSON_PATH):
+        log.warning("land.geojson not found at %s (sea check disabled)", LAND_GEOJSON_PATH)
+        LAND_FEATURES = []
+        return LAND_FEATURES
+
+    try:
+        with open(LAND_GEOJSON_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        feats = data.get("features") or []
+        LAND_FEATURES = feats
+        log.info("Loaded land.geojson features: %d", len(LAND_FEATURES))
+        return LAND_FEATURES
+    except Exception as e:
+        log.warning("Failed to load land.geojson (%s). Sea check disabled.", e)
+        LAND_FEATURES = []
+        return LAND_FEATURES
+
+
+def _rings_from_geom(geom: dict):
+    """
+    Returns list of rings (each ring is list of [lng,lat] closed),
+    supports Polygon and MultiPolygon.
+    Only outer rings are used (coords[0]).
+    """
+    if not geom or not isinstance(geom, dict):
+        return []
+
+    gtype = geom.get("type")
+    coords = geom.get("coordinates")
+
+    rings = []
+    if gtype == "Polygon":
+        if isinstance(coords, list) and coords and isinstance(coords[0], list):
+            ring = coords[0]
+            if isinstance(ring, list) and len(ring) >= 4:
+                rings.append(ring)
+    elif gtype == "MultiPolygon":
+        if isinstance(coords, list):
+            for poly in coords:
+                if not poly or not isinstance(poly, list):
+                    continue
+                ring = poly[0] if poly and isinstance(poly[0], list) else None
+                if isinstance(ring, list) and len(ring) >= 4:
+                    rings.append(ring)
+    return rings
+
+
+def _point_on_land(lng: float, lat: float) -> bool:
+    """
+    True if point is inside ANY land polygon ring.
+    If land.geojson missing/empty -> sea check disabled (ALLOW).
+    """
+    feats = _load_land_geojson()
+    if not feats:
+        return True  # do not block creation if file missing
+
+    for feat in feats:
+        g = (feat or {}).get("geometry") or {}
+        for ring in _rings_from_geom(g):
+            if point_in_polygon(lng, lat, ring):
+                return True
+    return False
+
+
+def _polygon_is_on_land(geom: dict) -> bool:
+    """
+    Sea rule: require ALL polygon vertices to be on land.
+    (Simple, fast, MVP)
+    """
+    ring = (geom.get("coordinates") or [[]])[0]
+    pts = ring[:-1]  # without closing point
+    if not pts:
+        return False
+    for lng, lat in pts:
+        if not _point_on_land(float(lng), float(lat)):
+            return False
+    return True
+
+
+# ---- polygon intersection (country-on-country) ----
+def _orient(a, b, c):
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _on_segment(a, b, c):
+    return (min(a[0], b[0]) <= c[0] <= max(a[0], b[0]) and
+            min(a[1], b[1]) <= c[1] <= max(a[1], b[1]))
+
+
+def _segments_intersect(p1, p2, q1, q2) -> bool:
+    o1 = _orient(p1, p2, q1)
+    o2 = _orient(p1, p2, q2)
+    o3 = _orient(q1, q2, p1)
+    o4 = _orient(q1, q2, p2)
+
+    if (o1 > 0) != (o2 > 0) and (o3 > 0) != (o4 > 0):
+        return True
+
+    eps = 1e-12
+    if abs(o1) < eps and _on_segment(p1, p2, q1): return True
+    if abs(o2) < eps and _on_segment(p1, p2, q2): return True
+    if abs(o3) < eps and _on_segment(q1, q2, p1): return True
+    if abs(o4) < eps and _on_segment(q1, q2, p2): return True
+
+    return False
+
+
+def _rings_intersect(ringA, ringB) -> bool:
+    """
+    True if polygons overlap/touch:
+    - any edge intersects
+    - or A contains a vertex of B
+    - or B contains a vertex of A
+    """
+    if not ringA or not ringB:
+        return False
+
+    A = ringA[:-1]
+    B = ringB[:-1]
+    if len(A) < 3 or len(B) < 3:
+        return False
+
+    for i in range(len(A)):
+        p1 = A[i]
+        p2 = A[(i + 1) % len(A)]
+        for j in range(len(B)):
+            q1 = B[j]
+            q2 = B[(j + 1) % len(B)]
+            if _segments_intersect(p1, p2, q1, q2):
+                return True
+
+    if point_in_polygon(B[0][0], B[0][1], ringA):
+        return True
+    if point_in_polygon(A[0][0], A[0][1], ringB):
+        return True
+
+    return False
+
+
+def _geom_intersects_any_country(new_geom: dict) -> bool:
+    """
+    Checks if new polygon intersects ANY existing country polygon.
+    """
+    new_ring = (new_geom.get("coordinates") or [[]])[0]
+    if not new_ring:
+        return False
+
+    for c in Country.query.all():
+        try:
+            old_geom = json.loads(c.geom_json)
+            old_ring = (old_geom.get("coordinates") or [[]])[0]
+        except Exception:
+            continue
+
+        if _rings_intersect(new_ring, old_ring):
+            return True
+
+    return False
+
+
+# ---------------------------
+# Resources & Blueprints (BASE)
+# ---------------------------
+# Це "ядра" родовищ (як у тебе). Ми НЕ ламаємо їх — просто розширюємо нижче.
+RESOURCE_NODES_BASE = [
     {"type": "oil", "name": "Oil Basin", "lng": 50.5, "lat": 24.0, "strength": 0.95},
     {"type": "oil", "name": "Oil Field", "lng": 44.0, "lat": 30.0, "strength": 0.78},
     {"type": "oil", "name": "Oil Sands", "lng": -113.5, "lat": 56.0, "strength": 0.66},
     {"type": "oil", "name": "Offshore Oil", "lng": 6.5, "lat": 53.2, "strength": 0.71},
+
     {"type": "gas", "name": "Gas Field", "lng": 56.0, "lat": 25.5, "strength": 0.86},
     {"type": "gas", "name": "Gas Field", "lng": 36.0, "lat": 31.0, "strength": 0.72},
     {"type": "gas", "name": "Gas Field", "lng": 65.0, "lat": 39.0, "strength": 0.77},
@@ -215,11 +395,15 @@ RESOURCE_NODES = [
     {"type": "iron", "name": "Iron Ore", "lng": 32.2, "lat": 47.8, "strength": 0.88},
     {"type": "iron", "name": "Iron Deposit", "lng": 107.0, "lat": 52.0, "strength": 0.67},
     {"type": "iron", "name": "Iron Ore", "lng": -74.0, "lat": 5.0, "strength": 0.70},
+
     {"type": "gold", "name": "Gold", "lng": -2.0, "lat": 7.0, "strength": 0.72},
     {"type": "gold", "name": "Gold", "lng": 120.5, "lat": -3.0, "strength": 0.60},
+
     {"type": "rare", "name": "Rare Minerals", "lng": 28.0, "lat": -3.0, "strength": 0.78},
     {"type": "rare", "name": "Rare Minerals", "lng": 103.0, "lat": 26.0, "strength": 0.70},
+
     {"type": "uranium", "name": "Uranium", "lng": 133.0, "lat": -22.0, "strength": 0.72},
+
     {"type": "coal", "name": "Coal", "lng": 24.5, "lat": 49.5, "strength": 0.82},
     {"type": "coal", "name": "Coal", "lng": 88.0, "lat": 23.0, "strength": 0.70},
     {"type": "coal", "name": "Coal", "lng": 147.0, "lat": -33.0, "strength": 0.66},
@@ -227,19 +411,203 @@ RESOURCE_NODES = [
     {"type": "water", "name": "Fresh Water", "lng": 90.0, "lat": 23.8, "strength": 0.90},
     {"type": "water", "name": "Fresh Water", "lng": 30.5, "lat": -1.3, "strength": 0.76},
     {"type": "water", "name": "Fresh Water", "lng": 137.0, "lat": 36.0, "strength": 0.74},
+
     {"type": "farmland", "name": "Farmland", "lng": 31.2, "lat": 49.2, "strength": 0.88},
     {"type": "farmland", "name": "Farmland", "lng": 10.5, "lat": 50.7, "strength": 0.74},
     {"type": "farmland", "name": "Farmland", "lng": -58.0, "lat": -34.5, "strength": 0.66},
+
     {"type": "fish", "name": "Fishing Zone", "lng": 142.0, "lat": 41.5, "strength": 0.72},
     {"type": "fish", "name": "Fishing Zone", "lng": 16.0, "lat": 55.5, "strength": 0.68},
 
     {"type": "wind", "name": "Wind Zone", "lng": 8.0, "lat": 56.0, "strength": 0.75},
     {"type": "wind", "name": "Wind Zone", "lng": 145.0, "lat": -35.0, "strength": 0.73},
+
     {"type": "solar", "name": "Solar", "lng": 25.0, "lat": 23.0, "strength": 0.86},
     {"type": "solar", "name": "Solar", "lng": -112.0, "lat": 34.0, "strength": 0.78},
+
     {"type": "hydro", "name": "Hydro Potential", "lng": 85.0, "lat": 28.0, "strength": 0.78},
     {"type": "geo", "name": "Geothermal", "lng": -21.9, "lat": 64.9, "strength": 0.64},
 ]
+
+# Скільки всього ресурсів хочеш (реально багато, але без сміття)
+RESOURCE_TOTAL_TARGET = int(os.getenv("RESOURCE_TOTAL_TARGET", "950"))
+
+# Мінімальна відстань між ресурсами (км) — щоб не було “каші”
+RESOURCE_MIN_DIST_KM = float(os.getenv("RESOURCE_MIN_DIST_KM", "55"))
+
+# Скільки спроб на генерацію (чим більше — тим точніше, але довше старт)
+RESOURCE_GEN_TRIES = int(os.getenv("RESOURCE_GEN_TRIES", "65000"))
+
+
+def _clamp(v, a, b):
+    return max(a, min(b, v))
+
+
+def _make_cluster_name(rtype: str, i: int) -> str:
+    pretty = {
+        "oil": "Oil",
+        "gas": "Gas",
+        "iron": "Iron",
+        "gold": "Gold",
+        "coal": "Coal",
+        "uranium": "Uranium",
+        "rare": "Rare",
+        "water": "Water",
+        "farmland": "Farmland",
+        "fish": "Fishing",
+        "wind": "Wind",
+        "solar": "Solar",
+        "hydro": "Hydro",
+        "geo": "Geo",
+    }.get(rtype, rtype.title())
+    return f"{pretty} Node #{i}"
+
+
+def _generate_more_resources():
+    """
+    Генерує багато ресурсів навколо "ядер" (RESOURCE_NODES_BASE),
+    але:
+      - з мінімальною відстанню між точками
+      - не ставить в океан, якщо land.geojson є
+    Детерміновано: seed fixed.
+    """
+    rng = random.Random(13371337)
+
+    # базові якорі
+    nodes = [dict(x) for x in RESOURCE_NODES_BASE]
+
+    # підготовка структури для швидкого приблизного фільтру
+    # (простий грід по градусах, щоб менше haversine викликів)
+    grid = {}
+    cell_deg = 2.0  # грубо, ок
+
+    def cell_key(lng, lat):
+        return (int((lng + 180) / cell_deg), int((lat + 90) / cell_deg))
+
+    def nearby_cells(lng, lat):
+        cx, cy = cell_key(lng, lat)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                yield (cx + dx, cy + dy)
+
+    # заповнити грід базовими
+    for n in nodes:
+        k = cell_key(n["lng"], n["lat"])
+        grid.setdefault(k, []).append((n["lng"], n["lat"]))
+
+    # ваги типів (щоб не було 90% “water” чи “wind”)
+    type_weights = {
+        "oil": 1.0,
+        "gas": 1.0,
+        "iron": 1.15,
+        "coal": 1.10,
+        "gold": 0.7,
+        "rare": 0.55,
+        "uranium": 0.35,
+        "water": 1.2,
+        "farmland": 1.2,
+        "fish": 0.85,
+        "wind": 0.95,
+        "solar": 0.95,
+        "hydro": 0.75,
+        "geo": 0.45,
+    }
+
+    # зробимо список “anchor points” для кожного типу
+    anchors_by_type = {}
+    for n in RESOURCE_NODES_BASE:
+        anchors_by_type.setdefault(n["type"], []).append(n)
+
+    types = list(type_weights.keys())
+    weights = [type_weights[t] for t in types]
+
+    def pick_type():
+        return rng.choices(types, weights=weights, k=1)[0]
+
+    # параметри “розкиду” (в градусах). Це не точно км, але ок для глобуса.
+    # чим ближче до екватора — тим адекватніше, але ми перевіряємо dist haversine.
+    spread_deg_by_type = {
+        "oil": 7.0,
+        "gas": 7.0,
+        "iron": 6.0,
+        "coal": 6.5,
+        "gold": 5.0,
+        "rare": 4.5,
+        "uranium": 4.0,
+        "water": 7.0,
+        "farmland": 7.0,
+        "fish": 6.0,
+        "wind": 7.5,
+        "solar": 7.5,
+        "hydro": 5.5,
+        "geo": 4.0,
+    }
+
+    # якщо land.geojson існує — не хочемо океан
+    feats = _load_land_geojson()
+    land_strict = bool(feats)
+
+    def ok_place(lng, lat):
+        # по широті/довготі
+        if lng < -180 or lng > 180 or lat < -90 or lat > 90:
+            return False
+        # суша (якщо є land)
+        if land_strict and not _point_on_land(lng, lat):
+            return False
+        # min dist (швидкий грід + точний haversine)
+        for ck in nearby_cells(lng, lat):
+            for (olng, olat) in grid.get(ck, []):
+                if haversine_km(lng, lat, olng, olat) < RESOURCE_MIN_DIST_KM:
+                    return False
+        return True
+
+    next_idx = 1
+
+    # головний цикл
+    for _ in range(RESOURCE_GEN_TRIES):
+        if len(nodes) >= RESOURCE_TOTAL_TARGET:
+            break
+
+        rtype = pick_type()
+        anchors = anchors_by_type.get(rtype) or RESOURCE_NODES_BASE
+        a = rng.choice(anchors)
+
+        spread = spread_deg_by_type.get(rtype, 6.0)
+        # gaussian “кластер”
+        lng = float(a["lng"]) + rng.gauss(0, spread)
+        lat = float(a["lat"]) + rng.gauss(0, spread * 0.72)
+
+        # clamp
+        lng = _clamp(lng, -179.8, 179.8)
+        lat = _clamp(lat, -85.0, 85.0)
+
+        if not ok_place(lng, lat):
+            continue
+
+        base_strength = float(a.get("strength", 0.65))
+        # трохи варіації, але не “сміття”
+        strength = _clamp(base_strength + rng.uniform(-0.22, 0.18), 0.35, 0.99)
+
+        nodes.append({
+            "type": rtype,
+            "name": _make_cluster_name(rtype, next_idx),
+            "lng": lng,
+            "lat": lat,
+            "strength": strength
+        })
+        next_idx += 1
+
+        # update grid
+        k = cell_key(lng, lat)
+        grid.setdefault(k, []).append((lng, lat))
+
+    log.info("Resources generated: %d (target %d, land_strict=%s)", len(nodes), RESOURCE_TOTAL_TARGET, land_strict)
+    return nodes
+
+
+# ✅ фінальний список ресурсів, який використовує весь сервер
+RESOURCE_NODES = _generate_more_resources()
+
 
 FACTORY_BLUEPRINTS = {
     "steel_mill": {"name": "Steel Mill", "icon": "🏗️", "desc": "Iron+Coal → profit", "build_cost": 900, "upkeep": 0, "base_income_per_hour": 70, "requires": {"iron": 1, "coal": 1}},
@@ -694,20 +1062,138 @@ def api_rules():
     })
 
 
+def _parse_bbox(s: str):
+    """
+    bbox = "west,south,east,north"
+    Returns tuple(w, s, e, n) or None
+    """
+    if not s:
+        return None
+    try:
+        parts = [float(x.strip()) for x in s.split(",")]
+        if len(parts) != 4:
+            return None
+        w, s_, e, n = parts
+        w = max(-180.0, min(180.0, w))
+        e = max(-180.0, min(180.0, e))
+        s_ = max(-90.0, min(90.0, s_))
+        n = max(-90.0, min(90.0, n))
+        return (w, s_, e, n)
+    except Exception:
+        return None
+
+
+def _in_bbox(lng: float, lat: float, bbox):
+    """
+    Supports antimeridian bbox too (west > east).
+    """
+    w, s, e, n = bbox
+    if lat < s or lat > n:
+        return False
+    if w <= e:
+        return (w <= lng <= e)
+    return (lng >= w) or (lng <= e)
+
+
 @app.get("/api/resources")
 def api_resources():
+    """
+    LOD endpoint:
+      /api/resources?bbox=...&zoom=...&limit=...
+    Backward compatible:
+      without params -> returns all resources.
+    """
+    bbox = _parse_bbox(request.args.get("bbox", "") or "")
+    try:
+        zoom = float(request.args.get("zoom", "") or "0")
+    except Exception:
+        zoom = 0.0
+
+    try:
+        limit = int(request.args.get("limit", "") or "0")
+    except Exception:
+        limit = 0
+
+    nodes = RESOURCE_NODES
+    if bbox:
+        nodes = [n for n in RESOURCE_NODES if _in_bbox(float(n["lng"]), float(n["lat"]), bbox)]
+
+    # old behavior fallback (no params)
+    if not bbox and limit <= 0 and zoom <= 0:
+        fc = {"type": "FeatureCollection", "features": []}
+        for idx, n in enumerate(RESOURCE_NODES, start=1):
+            fc["features"].append({
+                "type": "Feature",
+                "id": idx,
+                "properties": {
+                    "type": n["type"],
+                    "name": n.get("name") or n["type"],
+                    "strength": float(n.get("strength", 0.5))
+                },
+                "geometry": {"type": "Point", "coordinates": [float(n["lng"]), float(n["lat"])]}
+            })
+        return jsonify(ok=True, data=fc)
+
+    # LOD: grid aggregation (reduces “trash” on wide zoom)
+    if zoom < 1.6:
+        cell_deg = 6.0
+    elif zoom < 2.3:
+        cell_deg = 3.5
+    elif zoom < 3.2:
+        cell_deg = 2.2
+    elif zoom < 4.2:
+        cell_deg = 1.2
+    else:
+        cell_deg = 0.6
+
+    buckets = {}
+    for n in nodes:
+        lng = float(n["lng"])
+        lat = float(n["lat"])
+        rtype = n.get("type") or "unknown"
+        cx = int(math.floor((lng + 180.0) / cell_deg))
+        cy = int(math.floor((lat + 90.0) / cell_deg))
+        key = (cx, cy, rtype)
+
+        b = buckets.get(key)
+        if not b:
+            buckets[key] = {
+                "type": rtype,
+                "name": n.get("name") or rtype,
+                "lng_sum": lng,
+                "lat_sum": lat,
+                "count": 1,
+                "best_strength": float(n.get("strength", 0.5)),
+            }
+        else:
+            b["lng_sum"] += lng
+            b["lat_sum"] += lat
+            b["count"] += 1
+            b["best_strength"] = max(b["best_strength"], float(n.get("strength", 0.5)))
+
+    items = list(buckets.values())
+    items.sort(key=lambda x: (x["best_strength"], x["count"]), reverse=True)
+
+    if limit and limit > 0:
+        items = items[: max(10, min(limit, 12000))]
+
     fc = {"type": "FeatureCollection", "features": []}
-    for idx, n in enumerate(RESOURCE_NODES, start=1):
+    for idx, it in enumerate(items, start=1):
+        lng = it["lng_sum"] / it["count"]
+        lat = it["lat_sum"] / it["count"]
+        props = {
+            "type": it["type"],
+            "name": it["name"],
+            "strength": float(it["best_strength"]),
+            "count": int(it["count"]),
+        }
         fc["features"].append({
             "type": "Feature",
             "id": idx,
-            "properties": {
-                "type": n["type"],
-                "name": n.get("name") or n["type"],
-                "strength": float(n.get("strength", 0.5))
-            },
-            "geometry": {"type": "Point", "coordinates": [float(n["lng"]), float(n["lat"])]}
+            "properties": props,
+            "geometry": {"type": "Point", "coordinates": [float(lng), float(lat)]}
         })
+
     return jsonify(ok=True, data=fc)
 
 
@@ -789,11 +1275,11 @@ def api_countries_create():
     if not ok:
         return jsonify(ok=False, error=err), 400
 
-    # ✅ LAND CHECK (sea/ocean)
+    # LAND CHECK
     if not _polygon_is_on_land(geom):
         return jsonify(ok=False, error="Країну можна створювати лише на суші (не на морі/океані)."), 400
 
-    # ✅ OVERLAP CHECK (country-on-country)
+    # OVERLAP CHECK
     if _geom_intersects_any_country(geom):
         return jsonify(ok=False, error="Не можна створювати країну на країні (перетин з іншою країною)."), 400
 
@@ -818,7 +1304,6 @@ def api_countries_create():
     db.session.add(country)
     db.session.commit()
 
-    # ✅ IMPORTANT: return response (was missing in your pasted version)
     return jsonify(ok=True, country=country.to_feature(), coins=int(current_user.coins or 0))
 
 
@@ -1115,180 +1600,6 @@ def _ensure_schema():
     uri = (app.config.get("SQLALCHEMY_DATABASE_URI") or "")
     if uri.startswith("sqlite"):
         _ensure_user_columns_sqlite()
-
-
-# ---------------------------
-# LAND (GeoJSON) + polygon intersection helpers
-# ---------------------------
-LAND_GEOJSON_PATH = os.path.join(app.root_path, "static", "data", "land.geojson")
-LAND_FEATURES = None  # cached parsed land polygons
-
-def _load_land_geojson():
-    """
-    Loads land polygons from static/data/land.geojson once.
-    Expected: FeatureCollection of Polygon / MultiPolygon.
-    """
-    global LAND_FEATURES
-    if LAND_FEATURES is not None:
-        return LAND_FEATURES
-
-    if not os.path.exists(LAND_GEOJSON_PATH):
-        log.warning("land.geojson not found at %s (sea check disabled)", LAND_GEOJSON_PATH)
-        LAND_FEATURES = []
-        return LAND_FEATURES
-
-    try:
-        with open(LAND_GEOJSON_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        feats = data.get("features") or []
-        LAND_FEATURES = feats
-        log.info("Loaded land.geojson features: %d", len(LAND_FEATURES))
-        return LAND_FEATURES
-    except Exception as e:
-        log.warning("Failed to load land.geojson (%s). Sea check disabled.", e)
-        LAND_FEATURES = []
-        return LAND_FEATURES
-
-
-def _rings_from_geom(geom: dict):
-    """
-    Returns list of rings (each ring is list of [lng,lat] closed),
-    supports Polygon and MultiPolygon.
-    Only outer rings are used (coords[0]).
-    """
-    if not geom or not isinstance(geom, dict):
-        return []
-
-    gtype = geom.get("type")
-    coords = geom.get("coordinates")
-
-    rings = []
-    if gtype == "Polygon":
-        if isinstance(coords, list) and coords and isinstance(coords[0], list):
-            ring = coords[0]
-            if isinstance(ring, list) and len(ring) >= 4:
-                rings.append(ring)
-    elif gtype == "MultiPolygon":
-        if isinstance(coords, list):
-            for poly in coords:
-                if not poly or not isinstance(poly, list):
-                    continue
-                ring = poly[0] if poly and isinstance(poly[0], list) else None
-                if isinstance(ring, list) and len(ring) >= 4:
-                    rings.append(ring)
-    return rings
-
-
-def _point_on_land(lng: float, lat: float) -> bool:
-    """
-    True if point is inside ANY land polygon ring.
-    If land.geojson missing/empty -> sea check disabled (ALLOW).
-    """
-    feats = _load_land_geojson()
-    if not feats:
-        return True  # ✅ do not block creation if file missing
-
-    for feat in feats:
-        g = (feat or {}).get("geometry") or {}
-        for ring in _rings_from_geom(g):
-            if point_in_polygon(lng, lat, ring):
-                return True
-    return False
-
-
-def _polygon_is_on_land(geom: dict) -> bool:
-    """
-    Sea rule: require ALL polygon vertices to be on land.
-    (Simple, fast, MVP)
-    """
-    ring = (geom.get("coordinates") or [[]])[0]
-    pts = ring[:-1]  # without closing point
-    if not pts:
-        return False
-    for lng, lat in pts:
-        if not _point_on_land(float(lng), float(lat)):
-            return False
-    return True
-
-
-# ---- polygon intersection (country-on-country) ----
-def _orient(a, b, c):
-    return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])
-
-def _on_segment(a, b, c):
-    return (min(a[0], b[0]) <= c[0] <= max(a[0], b[0]) and
-            min(a[1], b[1]) <= c[1] <= max(a[1], b[1]))
-
-def _segments_intersect(p1, p2, q1, q2) -> bool:
-    o1 = _orient(p1, p2, q1)
-    o2 = _orient(p1, p2, q2)
-    o3 = _orient(q1, q2, p1)
-    o4 = _orient(q1, q2, p2)
-
-    if (o1 > 0) != (o2 > 0) and (o3 > 0) != (o4 > 0):
-        return True
-
-    eps = 1e-12
-    if abs(o1) < eps and _on_segment(p1, p2, q1): return True
-    if abs(o2) < eps and _on_segment(p1, p2, q2): return True
-    if abs(o3) < eps and _on_segment(q1, q2, p1): return True
-    if abs(o4) < eps and _on_segment(q1, q2, p2): return True
-
-    return False
-
-
-def _rings_intersect(ringA, ringB) -> bool:
-    """
-    True if polygons overlap/touch:
-    - any edge intersects
-    - or A contains a vertex of B
-    - or B contains a vertex of A
-    """
-    if not ringA or not ringB:
-        return False
-
-    A = ringA[:-1]
-    B = ringB[:-1]
-    if len(A) < 3 or len(B) < 3:
-        return False
-
-    for i in range(len(A)):
-        p1 = A[i]
-        p2 = A[(i + 1) % len(A)]
-        for j in range(len(B)):
-            q1 = B[j]
-            q2 = B[(j + 1) % len(B)]
-            if _segments_intersect(p1, p2, q1, q2):
-                return True
-
-    if point_in_polygon(B[0][0], B[0][1], ringA):
-        return True
-    if point_in_polygon(A[0][0], A[0][1], ringB):
-        return True
-
-    return False
-
-
-def _geom_intersects_any_country(new_geom: dict) -> bool:
-    """
-    Checks if new polygon intersects ANY existing country polygon.
-    """
-    new_ring = (new_geom.get("coordinates") or [[]])[0]
-    if not new_ring:
-        return False
-
-    for c in Country.query.all():
-        try:
-            old_geom = json.loads(c.geom_json)
-            old_ring = (old_geom.get("coordinates") or [[]])[0]
-        except Exception:
-            continue
-
-        if _rings_intersect(new_ring, old_ring):
-            return True
-
-    return False
 
 
 # ---------------------------
