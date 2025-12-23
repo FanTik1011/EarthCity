@@ -6,7 +6,7 @@
 import os
 import json
 import math
-import random  # ✅ NEW
+import random
 import logging
 from datetime import datetime
 from urllib.parse import urljoin
@@ -201,18 +201,196 @@ def compute_country_cost(area_km2: float) -> int:
 
 
 # ---------------------------
+# LAND (GeoJSON) + polygon intersection helpers
+# ---------------------------
+LAND_GEOJSON_PATH = os.path.join(app.root_path, "static", "data", "land.geojson")
+LAND_FEATURES = None  # cached parsed land polygons
+
+
+def _load_land_geojson():
+    """
+    Loads land polygons from static/data/land.geojson once.
+    Expected: FeatureCollection of Polygon / MultiPolygon.
+    """
+    global LAND_FEATURES
+    if LAND_FEATURES is not None:
+        return LAND_FEATURES
+
+    if not os.path.exists(LAND_GEOJSON_PATH):
+        log.warning("land.geojson not found at %s (sea check disabled)", LAND_GEOJSON_PATH)
+        LAND_FEATURES = []
+        return LAND_FEATURES
+
+    try:
+        with open(LAND_GEOJSON_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        feats = data.get("features") or []
+        LAND_FEATURES = feats
+        log.info("Loaded land.geojson features: %d", len(LAND_FEATURES))
+        return LAND_FEATURES
+    except Exception as e:
+        log.warning("Failed to load land.geojson (%s). Sea check disabled.", e)
+        LAND_FEATURES = []
+        return LAND_FEATURES
+
+
+def _rings_from_geom(geom: dict):
+    """
+    Returns list of rings (each ring is list of [lng,lat] closed),
+    supports Polygon and MultiPolygon.
+    Only outer rings are used (coords[0]).
+    """
+    if not geom or not isinstance(geom, dict):
+        return []
+
+    gtype = geom.get("type")
+    coords = geom.get("coordinates")
+
+    rings = []
+    if gtype == "Polygon":
+        if isinstance(coords, list) and coords and isinstance(coords[0], list):
+            ring = coords[0]
+            if isinstance(ring, list) and len(ring) >= 4:
+                rings.append(ring)
+    elif gtype == "MultiPolygon":
+        if isinstance(coords, list):
+            for poly in coords:
+                if not poly or not isinstance(poly, list):
+                    continue
+                ring = poly[0] if poly and isinstance(poly[0], list) else None
+                if isinstance(ring, list) and len(ring) >= 4:
+                    rings.append(ring)
+    return rings
+
+
+def _point_on_land(lng: float, lat: float) -> bool:
+    """
+    True if point is inside ANY land polygon ring.
+    If land.geojson missing/empty -> sea check disabled (ALLOW).
+    """
+    feats = _load_land_geojson()
+    if not feats:
+        return True  # ✅ do not block creation if file missing
+
+    for feat in feats:
+        g = (feat or {}).get("geometry") or {}
+        for ring in _rings_from_geom(g):
+            if point_in_polygon(lng, lat, ring):
+                return True
+    return False
+
+
+def _polygon_is_on_land(geom: dict) -> bool:
+    """
+    Sea rule: require ALL polygon vertices to be on land.
+    (Simple, fast, MVP)
+    """
+    ring = (geom.get("coordinates") or [[]])[0]
+    pts = ring[:-1]  # without closing point
+    if not pts:
+        return False
+    for lng, lat in pts:
+        if not _point_on_land(float(lng), float(lat)):
+            return False
+    return True
+
+
+# ---- polygon intersection (country-on-country) ----
+def _orient(a, b, c):
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _on_segment(a, b, c):
+    return (min(a[0], b[0]) <= c[0] <= max(a[0], b[0]) and
+            min(a[1], b[1]) <= c[1] <= max(a[1], b[1]))
+
+
+def _segments_intersect(p1, p2, q1, q2) -> bool:
+    o1 = _orient(p1, p2, q1)
+    o2 = _orient(p1, p2, q2)
+    o3 = _orient(q1, q2, p1)
+    o4 = _orient(q1, q2, p2)
+
+    if (o1 > 0) != (o2 > 0) and (o3 > 0) != (o4 > 0):
+        return True
+
+    eps = 1e-12
+    if abs(o1) < eps and _on_segment(p1, p2, q1):
+        return True
+    if abs(o2) < eps and _on_segment(p1, p2, q2):
+        return True
+    if abs(o3) < eps and _on_segment(q1, q2, p1):
+        return True
+    if abs(o4) < eps and _on_segment(q1, q2, p2):
+        return True
+
+    return False
+
+
+def _rings_intersect(ringA, ringB) -> bool:
+    """
+    True if polygons overlap/touch:
+    - any edge intersects
+    - or A contains a vertex of B
+    - or B contains a vertex of A
+    """
+    if not ringA or not ringB:
+        return False
+
+    A = ringA[:-1]
+    B = ringB[:-1]
+    if len(A) < 3 or len(B) < 3:
+        return False
+
+    for i in range(len(A)):
+        p1 = A[i]
+        p2 = A[(i + 1) % len(A)]
+        for j in range(len(B)):
+            q1 = B[j]
+            q2 = B[(j + 1) % len(B)]
+            if _segments_intersect(p1, p2, q1, q2):
+                return True
+
+    if point_in_polygon(B[0][0], B[0][1], ringA):
+        return True
+    if point_in_polygon(A[0][0], A[0][1], ringB):
+        return True
+
+    return False
+
+
+def _geom_intersects_any_country(new_geom: dict) -> bool:
+    """
+    Checks if new polygon intersects ANY existing country polygon.
+    """
+    new_ring = (new_geom.get("coordinates") or [[]])[0]
+    if not new_ring:
+        return False
+
+    for c in Country.query.all():
+        try:
+            old_geom = json.loads(c.geom_json)
+            old_ring = (old_geom.get("coordinates") or [[]])[0]
+        except Exception:
+            continue
+
+        if _rings_intersect(new_ring, old_ring):
+            return True
+
+    return False
+
+
+# ---------------------------
 # Resources & Blueprints
 # ---------------------------
-# ✅ NEW: scalable deterministic resources (does NOT break old logic)
-RESOURCE_PER_BASE = int(os.getenv("RESOURCE_PER_BASE", "60"))          # extra nodes per base point
-RESOURCE_SPREAD_DEG = float(os.getenv("RESOURCE_SPREAD_DEG", "2.2"))   # random offset spread
-RESOURCE_SEED = int(os.getenv("RESOURCE_SEED", "42"))                  # stable across restarts
-
+# Твій базовий набір (залишаємо)
 RESOURCE_NODES_BASE = [
     {"type": "oil", "name": "Oil Basin", "lng": 50.5, "lat": 24.0, "strength": 0.95},
     {"type": "oil", "name": "Oil Field", "lng": 44.0, "lat": 30.0, "strength": 0.78},
     {"type": "oil", "name": "Oil Sands", "lng": -113.5, "lat": 56.0, "strength": 0.66},
     {"type": "oil", "name": "Offshore Oil", "lng": 6.5, "lat": 53.2, "strength": 0.71},
+
     {"type": "gas", "name": "Gas Field", "lng": 56.0, "lat": 25.5, "strength": 0.86},
     {"type": "gas", "name": "Gas Field", "lng": 36.0, "lat": 31.0, "strength": 0.72},
     {"type": "gas", "name": "Gas Field", "lng": 65.0, "lat": 39.0, "strength": 0.77},
@@ -221,11 +399,15 @@ RESOURCE_NODES_BASE = [
     {"type": "iron", "name": "Iron Ore", "lng": 32.2, "lat": 47.8, "strength": 0.88},
     {"type": "iron", "name": "Iron Deposit", "lng": 107.0, "lat": 52.0, "strength": 0.67},
     {"type": "iron", "name": "Iron Ore", "lng": -74.0, "lat": 5.0, "strength": 0.70},
+
     {"type": "gold", "name": "Gold", "lng": -2.0, "lat": 7.0, "strength": 0.72},
     {"type": "gold", "name": "Gold", "lng": 120.5, "lat": -3.0, "strength": 0.60},
+
     {"type": "rare", "name": "Rare Minerals", "lng": 28.0, "lat": -3.0, "strength": 0.78},
     {"type": "rare", "name": "Rare Minerals", "lng": 103.0, "lat": 26.0, "strength": 0.70},
+
     {"type": "uranium", "name": "Uranium", "lng": 133.0, "lat": -22.0, "strength": 0.72},
+
     {"type": "coal", "name": "Coal", "lng": 24.5, "lat": 49.5, "strength": 0.82},
     {"type": "coal", "name": "Coal", "lng": 88.0, "lat": 23.0, "strength": 0.70},
     {"type": "coal", "name": "Coal", "lng": 147.0, "lat": -33.0, "strength": 0.66},
@@ -233,78 +415,167 @@ RESOURCE_NODES_BASE = [
     {"type": "water", "name": "Fresh Water", "lng": 90.0, "lat": 23.8, "strength": 0.90},
     {"type": "water", "name": "Fresh Water", "lng": 30.5, "lat": -1.3, "strength": 0.76},
     {"type": "water", "name": "Fresh Water", "lng": 137.0, "lat": 36.0, "strength": 0.74},
+
     {"type": "farmland", "name": "Farmland", "lng": 31.2, "lat": 49.2, "strength": 0.88},
     {"type": "farmland", "name": "Farmland", "lng": 10.5, "lat": 50.7, "strength": 0.74},
     {"type": "farmland", "name": "Farmland", "lng": -58.0, "lat": -34.5, "strength": 0.66},
+
     {"type": "fish", "name": "Fishing Zone", "lng": 142.0, "lat": 41.5, "strength": 0.72},
     {"type": "fish", "name": "Fishing Zone", "lng": 16.0, "lat": 55.5, "strength": 0.68},
 
     {"type": "wind", "name": "Wind Zone", "lng": 8.0, "lat": 56.0, "strength": 0.75},
     {"type": "wind", "name": "Wind Zone", "lng": 145.0, "lat": -35.0, "strength": 0.73},
+
     {"type": "solar", "name": "Solar", "lng": 25.0, "lat": 23.0, "strength": 0.86},
     {"type": "solar", "name": "Solar", "lng": -112.0, "lat": 34.0, "strength": 0.78},
+
     {"type": "hydro", "name": "Hydro Potential", "lng": 85.0, "lat": 28.0, "strength": 0.78},
     {"type": "geo", "name": "Geothermal", "lng": -21.9, "lat": 64.9, "strength": 0.64},
 ]
 
+# Генерація БАГАТЬОХ ресурсів для гри (не для рендера всіх одразу!)
+WORLD_RESOURCE_SEED = int(os.getenv("WORLD_RESOURCE_SEED", "202501"))
+WORLD_RESOURCE_COUNT = int(os.getenv("WORLD_RESOURCE_COUNT", "5000"))
+
+# Рендер-ліміти API (щоб не лагало)
+RES_API_MAX_RETURN = int(os.getenv("RES_API_MAX_RETURN", "900"))
+
+RESOURCE_WEIGHTS = {
+    "water": 0.14,
+    "farmland": 0.12,
+    "coal": 0.10,
+    "iron": 0.10,
+    "oil": 0.08,
+    "gas": 0.08,
+    "fish": 0.08,
+    "wind": 0.08,
+    "solar": 0.08,
+    "hydro": 0.06,
+    "gold": 0.05,
+    "rare": 0.02,
+    "uranium": 0.01,
+    "geo": 0.00,  # хочеш — 0.01
+}
+
+RESOURCE_LABELS = {
+    "oil": "Oil",
+    "gas": "Gas",
+    "iron": "Iron",
+    "coal": "Coal",
+    "gold": "Gold",
+    "rare": "Rare Minerals",
+    "uranium": "Uranium",
+    "water": "Fresh Water",
+    "farmland": "Farmland",
+    "fish": "Fishing Zone",
+    "wind": "Wind Zone",
+    "solar": "Solar",
+    "hydro": "Hydro Potential",
+    "geo": "Geothermal",
+}
+
+
+def _pick_weighted(rnd: random.Random, weights: dict) -> str:
+    items = [(k, max(0.0, float(v))) for k, v in (weights or {}).items() if float(v) > 0]
+    total = sum(v for _, v in items)
+    if total <= 0:
+        return "water"
+    r = rnd.random() * total
+    acc = 0.0
+    for k, v in items:
+        acc += v
+        if r <= acc:
+            return k
+    return items[-1][0]
+
+
 def _clamp(v, a, b):
     return max(a, min(b, v))
 
+
 def _wrap_lng(lng):
-    # normalize to [-180, 180]
     while lng > 180:
         lng -= 360
     while lng < -180:
         lng += 360
     return lng
 
-def expand_resource_nodes(base_nodes, per_base=60, spread_deg=2.2, seed=42):
+
+def _generate_world_resources(base_nodes, count: int, seed: int):
     """
-    Generate many resource nodes around each base point.
-    Deterministic via seed => stable between restarts.
+    Генерує багато ресурсів (детерміновано) по всій мапі.
+    Важливо: НЕ рендеримо всі одразу на фронті — фронт має просити по bbox.
     """
     rnd = random.Random(seed)
-    out = []
-    for n in base_nodes:
-        out.append(dict(n))  # keep original
 
-        for _ in range(per_base):
-            dlng = rnd.uniform(-spread_deg, spread_deg)
-            dlat = rnd.uniform(-spread_deg, spread_deg)
+    # якщо land.geojson є — спробуємо класти більшість ресурсів на сушу
+    feats = _load_land_geojson()
+    land_available = bool(feats)
 
-            lng = _wrap_lng(float(n["lng"]) + dlng)
-            lat = _clamp(float(n["lat"]) + dlat, -85, 85)
+    land_types = {"oil", "gas", "iron", "coal", "gold", "rare", "uranium", "farmland", "geo", "water", "solar", "wind", "hydro"}
+    # fish логічно на воді, але якщо land.geojson нема — не обмежуємо
+    fish_type = {"fish"}
 
-            # strength variation but not too low
-            s = _clamp(float(n.get("strength", 0.6)) + rnd.uniform(-0.18, 0.18), 0.35, 1.0)
+    out = [dict(n) for n in (base_nodes or [])]
 
-            out.append({
-                "type": n["type"],
-                "name": n.get("name") or n["type"],
-                "lng": round(lng, 5),
-                "lat": round(lat, 5),
-                "strength": round(s, 2)
-            })
+    tries = 0
+    target = max(0, int(count))
+    while len(out) < len(base_nodes) + target and tries < target * 30:
+        tries += 1
+
+        rtype = _pick_weighted(rnd, RESOURCE_WEIGHTS)
+        lng = _wrap_lng(rnd.uniform(-180, 180))
+        lat = _clamp(rnd.uniform(-85, 85), -85, 85)
+        strength = _clamp(0.35 + rnd.random() * 0.65, 0.35, 1.0)
+
+        # якщо є land.geojson — розкладка “реалістичніша”
+        if land_available:
+            on_land = _point_on_land(float(lng), float(lat))
+            if rtype in fish_type:
+                if on_land:
+                    continue
+            elif rtype in land_types:
+                if not on_land:
+                    continue
+
+        out.append({
+            "type": rtype,
+            "name": RESOURCE_LABELS.get(rtype, rtype),
+            "lng": float(lng),
+            "lat": float(lat),
+            "strength": float(round(strength, 2)),
+        })
+
+    log.info("Resources total: %d (base=%d + generated=%d, tries=%d)",
+             len(out), len(base_nodes), len(out) - len(base_nodes), tries)
     return out
 
-# ✅ This is used everywhere as before (/api/resources, factories checks, etc.)
-RESOURCE_NODES = expand_resource_nodes(
-    RESOURCE_NODES_BASE,
-    per_base=RESOURCE_PER_BASE,
-    spread_deg=RESOURCE_SPREAD_DEG,
-    seed=RESOURCE_SEED
-)
+
+# Глобальний список ресурсів, який використовується:
+# - для factory checks (near resources)
+# - для API /api/resources (але віддаємо тільки по bbox і з лімітом)
+RESOURCE_NODES = RESOURCE_NODES_BASE[:]  # заповнимо нижче після init land (коли можливо)
+
 
 FACTORY_BLUEPRINTS = {
-    "steel_mill": {"name": "Steel Mill", "icon": "🏗️", "desc": "Iron+Coal → profit", "build_cost": 900, "upkeep": 0, "base_income_per_hour": 70, "requires": {"iron": 1, "coal": 1}},
-    "oil_refinery": {"name": "Oil Refinery", "icon": "🛢️", "desc": "Oil → money", "build_cost": 1100, "upkeep": 0, "base_income_per_hour": 95, "requires": {"oil": 1}},
-    "gas_plant": {"name": "Gas Plant", "icon": "🔥", "desc": "Gas → profit", "build_cost": 980, "upkeep": 0, "base_income_per_hour": 82, "requires": {"gas": 1}},
-    "hydro_plant": {"name": "Hydro Plant", "icon": "🌊", "desc": "Hydro → profit", "build_cost": 950, "upkeep": 0, "base_income_per_hour": 78, "requires": {"hydro": 1}},
-    "farm_complex": {"name": "Farm Complex", "icon": "🌾", "desc": "Farmland → profit", "build_cost": 650, "upkeep": 0, "base_income_per_hour": 52, "requires": {"farmland": 1}},
-    "waterworks": {"name": "Waterworks", "icon": "💧", "desc": "Water → profit", "build_cost": 720, "upkeep": 0, "base_income_per_hour": 50, "requires": {"water": 1}},
-    "rare_lab": {"name": "Rare Lab", "icon": "💎", "desc": "Rare → big profit", "build_cost": 1400, "upkeep": 0, "base_income_per_hour": 130, "requires": {"rare": 1}},
-    "gold_mint": {"name": "Gold Mint", "icon": "🪙", "desc": "Gold → big profit", "build_cost": 1350, "upkeep": 0, "base_income_per_hour": 125, "requires": {"gold": 1}},
-    "shipyard": {"name": "Shipyard", "icon": "⚓", "desc": "Fish → profit", "build_cost": 1000, "upkeep": 0, "base_income_per_hour": 88, "requires": {"fish": 1}},
+    "steel_mill": {"name": "Steel Mill", "icon": "🏗️", "desc": "Iron+Coal → profit", "build_cost": 900, "upkeep": 0,
+                   "base_income_per_hour": 70, "requires": {"iron": 1, "coal": 1}},
+    "oil_refinery": {"name": "Oil Refinery", "icon": "🛢️", "desc": "Oil → money", "build_cost": 1100, "upkeep": 0,
+                     "base_income_per_hour": 95, "requires": {"oil": 1}},
+    "gas_plant": {"name": "Gas Plant", "icon": "🔥", "desc": "Gas → profit", "build_cost": 980, "upkeep": 0,
+                  "base_income_per_hour": 82, "requires": {"gas": 1}},
+    "hydro_plant": {"name": "Hydro Plant", "icon": "🌊", "desc": "Hydro → profit", "build_cost": 950, "upkeep": 0,
+                    "base_income_per_hour": 78, "requires": {"hydro": 1}},
+    "farm_complex": {"name": "Farm Complex", "icon": "🌾", "desc": "Farmland → profit", "build_cost": 650, "upkeep": 0,
+                     "base_income_per_hour": 52, "requires": {"farmland": 1}},
+    "waterworks": {"name": "Waterworks", "icon": "💧", "desc": "Water → profit", "build_cost": 720, "upkeep": 0,
+                   "base_income_per_hour": 50, "requires": {"water": 1}},
+    "rare_lab": {"name": "Rare Lab", "icon": "💎", "desc": "Rare → big profit", "build_cost": 1400, "upkeep": 0,
+                 "base_income_per_hour": 130, "requires": {"rare": 1}},
+    "gold_mint": {"name": "Gold Mint", "icon": "🪙", "desc": "Gold → big profit", "build_cost": 1350, "upkeep": 0,
+                  "base_income_per_hour": 125, "requires": {"gold": 1}},
+    "shipyard": {"name": "Shipyard", "icon": "⚓", "desc": "Fish → profit", "build_cost": 1000, "upkeep": 0,
+                 "base_income_per_hour": 88, "requires": {"fish": 1}},
 }
 
 
@@ -422,6 +693,7 @@ def admin_required(fn):
         if not getattr(current_user, "is_admin", False):
             return jsonify(ok=False, error="Admin only"), 403
         return fn(*args, **kwargs)
+
     return wrapper
 
 
@@ -748,11 +1020,57 @@ def api_rules():
     })
 
 
+def _parse_bbox(bbox_str: str):
+    """
+    bbox=minLng,minLat,maxLng,maxLat
+    """
+    try:
+        parts = [float(x) for x in (bbox_str or "").split(",")]
+        if len(parts) != 4:
+            return None
+        min_lng, min_lat, max_lng, max_lat = parts
+        min_lng = _clamp(min_lng, -180, 180)
+        max_lng = _clamp(max_lng, -180, 180)
+        min_lat = _clamp(min_lat, -85, 85)
+        max_lat = _clamp(max_lat, -85, 85)
+        return min_lng, min_lat, max_lng, max_lat
+    except Exception:
+        return None
+
+
+def _in_bbox(lng, lat, bbox):
+    min_lng, min_lat, max_lng, max_lat = bbox
+    if max_lng >= min_lng:
+        return (min_lng <= lng <= max_lng) and (min_lat <= lat <= max_lat)
+    # crosses dateline
+    return ((lng >= min_lng or lng <= max_lng) and (min_lat <= lat <= max_lat))
+
+
 @app.get("/api/resources")
 def api_resources():
-    fc = {"type": "FeatureCollection", "features": []}
-    for idx, n in enumerate(RESOURCE_NODES, start=1):
-        fc["features"].append({
+    """
+    ✅ Без лагів:
+    - фронт має викликати /api/resources?bbox=minLng,minLat,maxLng,maxLat
+    - бек повертає тільки ресурси в видимому прямокутнику + ліміт max
+    """
+    bbox = _parse_bbox(request.args.get("bbox") or "")
+    max_return = int(request.args.get("max") or RES_API_MAX_RETURN)
+    max_return = int(_clamp(max_return, 100, 2000))
+
+    # Якщо bbox не дали — повернемо невеликий демо-набір (щоб нічого не ламалось)
+    if not bbox:
+        bbox = (-30.0, 35.0, 40.0, 70.0)
+        max_return = min(max_return, 350)
+
+    feats = []
+    idx = 1
+    for n in RESOURCE_NODES:
+        lng = float(n["lng"])
+        lat = float(n["lat"])
+        if not _in_bbox(lng, lat, bbox):
+            continue
+
+        feats.append({
             "type": "Feature",
             "id": idx,
             "properties": {
@@ -760,9 +1078,13 @@ def api_resources():
                 "name": n.get("name") or n["type"],
                 "strength": float(n.get("strength", 0.5))
             },
-            "geometry": {"type": "Point", "coordinates": [float(n["lng"]), float(n["lat"])]}
+            "geometry": {"type": "Point", "coordinates": [lng, lat]}
         })
-    return jsonify(ok=True, data=fc)
+        idx += 1
+        if len(feats) >= max_return:
+            break
+
+    return jsonify(ok=True, data={"type": "FeatureCollection", "features": feats})
 
 
 @app.get("/api/blueprints")
@@ -801,7 +1123,7 @@ def _validate_polygon(geom: dict):
         return False, "Polygon coordinates invalid"
     ring = coords[0]
     if not isinstance(ring, list) or len(ring) < (COUNTRY_MIN_POINTS + 1):
-        return False, f"Polygon ring must have {COUNTRY_MIN_POINTS+1}+ points"
+        return False, f"Polygon ring must have {COUNTRY_MIN_POINTS + 1}+ points"
     if len(ring) > (COUNTRY_MAX_POINTS + 1):
         return False, f"Too many points (max {COUNTRY_MAX_POINTS})"
     for p in ring:
@@ -872,7 +1194,6 @@ def api_countries_create():
     db.session.add(country)
     db.session.commit()
 
-    # ✅ IMPORTANT: return response (was missing in your pasted version)
     return jsonify(ok=True, country=country.to_feature(), coins=int(current_user.coins or 0))
 
 
@@ -1172,185 +1493,15 @@ def _ensure_schema():
 
 
 # ---------------------------
-# LAND (GeoJSON) + polygon intersection helpers
-# ---------------------------
-LAND_GEOJSON_PATH = os.path.join(app.root_path, "static", "data", "land.geojson")
-LAND_FEATURES = None  # cached parsed land polygons
-
-def _load_land_geojson():
-    """
-    Loads land polygons from static/data/land.geojson once.
-    Expected: FeatureCollection of Polygon / MultiPolygon.
-    """
-    global LAND_FEATURES
-    if LAND_FEATURES is not None:
-        return LAND_FEATURES
-
-    if not os.path.exists(LAND_GEOJSON_PATH):
-        log.warning("land.geojson not found at %s (sea check disabled)", LAND_GEOJSON_PATH)
-        LAND_FEATURES = []
-        return LAND_FEATURES
-
-    try:
-        with open(LAND_GEOJSON_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        feats = data.get("features") or []
-        LAND_FEATURES = feats
-        log.info("Loaded land.geojson features: %d", len(LAND_FEATURES))
-        return LAND_FEATURES
-    except Exception as e:
-        log.warning("Failed to load land.geojson (%s). Sea check disabled.", e)
-        LAND_FEATURES = []
-        return LAND_FEATURES
-
-
-def _rings_from_geom(geom: dict):
-    """
-    Returns list of rings (each ring is list of [lng,lat] closed),
-    supports Polygon and MultiPolygon.
-    Only outer rings are used (coords[0]).
-    """
-    if not geom or not isinstance(geom, dict):
-        return []
-
-    gtype = geom.get("type")
-    coords = geom.get("coordinates")
-
-    rings = []
-    if gtype == "Polygon":
-        if isinstance(coords, list) and coords and isinstance(coords[0], list):
-            ring = coords[0]
-            if isinstance(ring, list) and len(ring) >= 4:
-                rings.append(ring)
-    elif gtype == "MultiPolygon":
-        if isinstance(coords, list):
-            for poly in coords:
-                if not poly or not isinstance(poly, list):
-                    continue
-                ring = poly[0] if poly and isinstance(poly[0], list) else None
-                if isinstance(ring, list) and len(ring) >= 4:
-                    rings.append(ring)
-    return rings
-
-
-def _point_on_land(lng: float, lat: float) -> bool:
-    """
-    True if point is inside ANY land polygon ring.
-    If land.geojson missing/empty -> sea check disabled (ALLOW).
-    """
-    feats = _load_land_geojson()
-    if not feats:
-        return True  # ✅ do not block creation if file missing
-
-    for feat in feats:
-        g = (feat or {}).get("geometry") or {}
-        for ring in _rings_from_geom(g):
-            if point_in_polygon(lng, lat, ring):
-                return True
-    return False
-
-
-def _polygon_is_on_land(geom: dict) -> bool:
-    """
-    Sea rule: require ALL polygon vertices to be on land.
-    (Simple, fast, MVP)
-    """
-    ring = (geom.get("coordinates") or [[]])[0]
-    pts = ring[:-1]  # without closing point
-    if not pts:
-        return False
-    for lng, lat in pts:
-        if not _point_on_land(float(lng), float(lat)):
-            return False
-    return True
-
-
-# ---- polygon intersection (country-on-country) ----
-def _orient(a, b, c):
-    return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])
-
-def _on_segment(a, b, c):
-    return (min(a[0], b[0]) <= c[0] <= max(a[0], b[0]) and
-            min(a[1], b[1]) <= c[1] <= max(a[1], b[1]))
-
-def _segments_intersect(p1, p2, q1, q2) -> bool:
-    o1 = _orient(p1, p2, q1)
-    o2 = _orient(p1, p2, q2)
-    o3 = _orient(q1, q2, p1)
-    o4 = _orient(q1, q2, p2)
-
-    if (o1 > 0) != (o2 > 0) and (o3 > 0) != (o4 > 0):
-        return True
-
-    eps = 1e-12
-    if abs(o1) < eps and _on_segment(p1, p2, q1): return True
-    if abs(o2) < eps and _on_segment(p1, p2, q2): return True
-    if abs(o3) < eps and _on_segment(q1, q2, p1): return True
-    if abs(o4) < eps and _on_segment(q1, q2, p2): return True
-
-    return False
-
-
-def _rings_intersect(ringA, ringB) -> bool:
-    """
-    True if polygons overlap/touch:
-    - any edge intersects
-    - or A contains a vertex of B
-    - or B contains a vertex of A
-    """
-    if not ringA or not ringB:
-        return False
-
-    A = ringA[:-1]
-    B = ringB[:-1]
-    if len(A) < 3 or len(B) < 3:
-        return False
-
-    for i in range(len(A)):
-        p1 = A[i]
-        p2 = A[(i + 1) % len(A)]
-        for j in range(len(B)):
-            q1 = B[j]
-            q2 = B[(j + 1) % len(B)]
-            if _segments_intersect(p1, p2, q1, q2):
-                return True
-
-    if point_in_polygon(B[0][0], B[0][1], ringA):
-        return True
-    if point_in_polygon(A[0][0], A[0][1], ringB):
-        return True
-
-    return False
-
-
-def _geom_intersects_any_country(new_geom: dict) -> bool:
-    """
-    Checks if new polygon intersects ANY existing country polygon.
-    """
-    new_ring = (new_geom.get("coordinates") or [[]])[0]
-    if not new_ring:
-        return False
-
-    for c in Country.query.all():
-        try:
-            old_geom = json.loads(c.geom_json)
-            old_ring = (old_geom.get("coordinates") or [[]])[0]
-        except Exception:
-            continue
-
-        if _rings_intersect(new_ring, old_ring):
-            return True
-
-    return False
-
-
-# ---------------------------
-# Init DB once per dyno boot
+# Init DB once per dyno boot + generate world resources
 # ---------------------------
 with app.app_context():
     db.create_all()
     _ensure_schema()
+
+    # важливо: завантажимо land (якщо є), і тільки тоді згенеруємо ресурси
+    _load_land_geojson()
+    RESOURCE_NODES = _generate_world_resources(RESOURCE_NODES_BASE, WORLD_RESOURCE_COUNT, WORLD_RESOURCE_SEED)
 
 
 if __name__ == "__main__":
