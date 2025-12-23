@@ -1,7 +1,6 @@
 // static/js/map.js
 // EarthCity — Globe + Resources(server, LOD) + Countries + Create Country + Factories(server)
-// + land-only countries (green/red zones) + no country-on-country placement + live cost while drafting
-// + PERF: HTML markers only when few points + heavy HUD updates throttled (RAF)
+// CLEAN UI + FAST: no DOM spam, smart LOD, hover tooltip, capped HTML markers, smooth radius
 
 (function () {
   const $ = (id) => document.getElementById(id);
@@ -31,6 +30,7 @@
   const draftCostEl = $("draftCost");
   const myCoinsEl = $("myCoins");           // sidebar pill
   const myCoinsModalEl = $("myCoinsModal"); // modal coins
+  const topCoinsEl = $("topCoins");
 
   // Left factory sidebar
   const factorybar = $("factorybar");
@@ -73,7 +73,8 @@
     if (starsEl) starsEl.style.opacity = opacity.toFixed(2);
   }
 
-  // ---- Math helpers ----
+  // ---- Helpers ----
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   function rad(d) { return d * Math.PI / 180; }
 
   function angularDistanceRad(lng1, lat1, lng2, lat2) {
@@ -126,6 +127,29 @@
     fbMsg.textContent = "";
   }
 
+  // Debounce
+  function debounce(fn, ms) {
+    let t = null;
+    return (...args) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn(...args), ms);
+    };
+  }
+
+  // RAF throttle (for HUD)
+  function rafThrottle(fn) {
+    let raf = 0;
+    let lastArgs = null;
+    return (...args) => {
+      lastArgs = args;
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        fn(...lastArgs);
+      });
+    };
+  }
+
   // ---- Rules + coins ----
   let RULES = {
     start_coins: 5000,
@@ -133,14 +157,13 @@
     country_cost_per_1000_km2: 35,
     country_max_area_km2: 250000,
     country_max_points: 60,
-
     factory_place_fee: 120,
     factory_pick_radius_km: 120,
     factory_max_per_country: 40
   };
 
   let MY_COINS = 0;
-  let ME = { authenticated: false, username: null, has_country: false, is_confirmed: false };
+  let ME = { authenticated: false, username: null, has_country: false };
 
   async function loadRules() {
     const r = await fetch("/api/rules", { credentials: "include" });
@@ -151,11 +174,13 @@
   async function refreshMe() {
     const r = await fetch("/api/me", { credentials: "include" });
     const j = await r.json().catch(() => ({}));
-    ME = j || { authenticated:false };
-
+    ME = j || { authenticated: false };
     MY_COINS = (j && typeof j.coins === "number") ? j.coins : 0;
-    if (myCoinsEl) myCoinsEl.textContent = `${MY_COINS} EC`;
-    if (myCoinsModalEl) myCoinsModalEl.textContent = `${MY_COINS} EC`;
+
+    const pretty = `${MY_COINS} EC`;
+    if (myCoinsEl) myCoinsEl.textContent = `💰 ${pretty}`;
+    if (myCoinsModalEl) myCoinsModalEl.textContent = `${pretty}`;
+    if (topCoinsEl) topCoinsEl.textContent = `💰 ${pretty}`;
   }
 
   function computeCountryCost(areaKm2) {
@@ -285,7 +310,9 @@
   // =========================================================
   // Country-on-country overlap check (client-side)
   // =========================================================
-  function orient(a, b, c) { return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]); }
+  function orient(a, b, c) {
+    return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]);
+  }
   function onSegment(a, b, c) {
     return (Math.min(a[0], b[0]) <= c[0] && c[0] <= Math.max(a[0], b[0]) &&
             Math.min(a[1], b[1]) <= c[1] && c[1] <= Math.max(a[1], b[1]));
@@ -306,6 +333,7 @@
 
     return false;
   }
+
   function ringsIntersect(ringAClosed, ringBClosed) {
     if (!ringAClosed || !ringBClosed) return false;
     const A = ringAClosed.slice(0, -1);
@@ -319,8 +347,10 @@
         if (segmentsIntersect(p1, p2, q1, q2)) return true;
       }
     }
+
     if (pointInRing(B[0][0], B[0][1], ringAClosed)) return true;
     if (pointInRing(A[0][0], A[0][1], ringBClosed)) return true;
+
     return false;
   }
 
@@ -328,6 +358,7 @@
     if (draftPoints.length < 3) return false;
     const ring = draftPoints.map(p => [p.lng, p.lat]);
     const closed = ring.concat([ring[0]]);
+
     const feats = (countriesFC && countriesFC.features) ? countriesFC.features : [];
     for (const f of feats) {
       const g = f && f.geometry;
@@ -345,6 +376,7 @@
 
   function addDraftPreviewLayer() {
     if (map.getSource("draftPreview")) return;
+
     map.addSource("draftPreview", { type: "geojson", data: DRAFT_PREVIEW });
 
     map.addLayer({
@@ -352,14 +384,22 @@
       type: "circle",
       source: "draftPreview",
       paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.2, 4.5, 6, 8.0],
+        "circle-radius": [
+          "interpolate", ["exponential", 1.45], ["zoom"],
+          1.0, 5,
+          2.2, 7,
+          3.2, 10,
+          4.2, 14,
+          6.0, 18
+        ],
         "circle-color": ["case",
           ["==", ["get", "ok"], 1], "rgba(34,197,94,1)",
           "rgba(239,68,68,1)"
         ],
         "circle-opacity": 0.92,
         "circle-stroke-color": "rgba(0,0,0,0.55)",
-        "circle-stroke-width": 1
+        "circle-stroke-width": 1,
+        "circle-blur": 0.18
       }
     });
   }
@@ -390,76 +430,51 @@
   }
 
   // =========================================================
-  // RESOURCES (server) + LOD + PERF
+  // RESOURCES (server) + CLEAN LOD
   // =========================================================
   let RESOURCES = { type:"FeatureCollection", features: [] };
 
   const RESOURCE_META = {
-    oil:      { icon: "🛢️", color: "rgba(250, 204, 21, 1)" },
-    gas:      { icon: "🔥",  color: "rgba(251, 146, 60, 1)" },
-    iron:     { icon: "⛏️",  color: "rgba(226, 232, 240, 1)" },
-    gold:     { icon: "🪙",  color: "rgba(251, 191, 36, 1)" },
-    coal:     { icon: "🪨",  color: "rgba(148, 163, 184, 1)" },
-    uranium:  { icon: "☢️",  color: "rgba(74, 222, 128, 1)" },
-    rare:     { icon: "💎",  color: "rgba(196, 181, 253, 1)" },
-    water:    { icon: "💧",  color: "rgba(96, 165, 250, 1)" },
-    farmland: { icon: "🌾",  color: "rgba(74, 222, 128, 1)" },
-    fish:     { icon: "🐟",  color: "rgba(56, 189, 248, 1)" },
-    wind:     { icon: "🌬️",  color: "rgba(196, 181, 253, 1)" },
-    solar:    { icon: "☀️",  color: "rgba(253, 164, 175, 1)" },
-    hydro:    { icon: "🌊",  color: "rgba(96, 165, 250, 1)" },
-    geo:      { icon: "🌋",  color: "rgba(244, 63, 94, 1)" }
+    oil:      { icon: "🛢️" },
+    gas:      { icon: "🔥"  },
+    iron:     { icon: "⛏️"  },
+    gold:     { icon: "🪙"  },
+    coal:     { icon: "🪨"  },
+    uranium:  { icon: "☢️"  },
+    rare:     { icon: "💎"  },
+    water:    { icon: "💧"  },
+    farmland: { icon: "🌾"  },
+    fish:     { icon: "🐟"  },
+    wind:     { icon: "🌬️"  },
+    solar:    { icon: "☀️"  },
+    hydro:    { icon: "🌊"  },
+    geo:      { icon: "🌋"  }
   };
 
-  const resourceMarkers = []; // { marker, el }
-  let RESOURCE_MARKERS_ENABLED = false;
-  let __lastResKey = "";
+  // Smooth radius (prettier when zooming)
+  const RESOURCE_RADIUS = [
+    "interpolate", ["exponential", 1.55], ["zoom"],
+    0.8, 1.2,
+    1.3, 1.6,
+    1.7, 2.2,
+    2.2, 3.2,
+    2.8, 4.6,
+    3.4, 6.2,
+    4.2, 8.6,
+    5.0, 11.8,
+    6.2, 14.5
+  ];
 
-  // Smaller resource name/percent (requested)
-  function makeResourceElement(type, name, strength) {
-    const meta = RESOURCE_META[type] || { icon: "✨", color: "rgba(255,255,255,1)" };
-
-    const wrap = document.createElement("div");
-    wrap.className = "resource-marker";
-
-    // make it a bit smaller than before
-    wrap.style.padding = "6px 9px";
-    wrap.style.gap = "8px";
-
-    const dot = document.createElement("div");
-    dot.className = "resource-dot";
-    dot.style.background = meta.color;
-    dot.style.boxShadow = `0 0 14px ${meta.color.replace("1)", "0.30)")}`;
-
-    const ico = document.createElement("div");
-    ico.className = "resource-ico";
-    ico.textContent = meta.icon;
-    ico.style.fontSize = "15px"; // smaller icon
-
-    const label = document.createElement("div");
-    label.className = "resource-name";
-    label.textContent = (name || type);
-    label.style.fontSize = "11px";  // ✅ smaller name
-    label.style.lineHeight = "1.05";
-    label.style.maxWidth = "120px";
-    label.style.whiteSpace = "nowrap";
-    label.style.overflow = "hidden";
-    label.style.textOverflow = "ellipsis";
-
-    const st = document.createElement("div");
-    st.className = "resource-strength";
-    st.textContent = `${Math.round((Number(strength) || 0) * 100)}%`;
-    st.style.fontSize = "10px"; // ✅ smaller percent
-    st.style.opacity = "0.92";
-
-    wrap.appendChild(dot);
-    wrap.appendChild(ico);
-    wrap.appendChild(label);
-    wrap.appendChild(st);
-
-    wrap.title = `${name || type} • ${Math.round((Number(strength) || 0) * 100)}%`;
-    return wrap;
-  }
+  const RESOURCE_GLOW_RADIUS = [
+    "interpolate", ["exponential", 1.6], ["zoom"],
+    0.8, 4,
+    1.5, 8,
+    2.2, 14,
+    3.0, 22,
+    4.2, 34,
+    5.2, 46,
+    6.2, 58
+  ];
 
   function addResourceLayers() {
     if (map.getSource("resources")) return;
@@ -471,7 +486,7 @@
       type: "circle",
       source: "resources",
       paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 6, 3, 16, 6, 36],
+        "circle-radius": RESOURCE_GLOW_RADIUS,
         "circle-color": ["match", ["get", "type"],
           "oil", "rgba(250,204,21,0.95)",
           "gas", "rgba(251,146,60,0.95)",
@@ -489,8 +504,8 @@
           "geo", "rgba(244,63,94,0.96)",
           "rgba(34,197,94,0.95)"
         ],
-        "circle-opacity": ["interpolate", ["linear"], ["get", "strength"], 0.5, 0.10, 1.0, 0.24],
-        "circle-blur": 1
+        "circle-opacity": ["interpolate", ["linear"], ["get", "strength"], 0.5, 0.08, 1.0, 0.18],
+        "circle-blur": 1.05
       }
     });
 
@@ -499,7 +514,7 @@
       type: "circle",
       source: "resources",
       paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 2.0, 3, 3.6, 6, 6.4],
+        "circle-radius": RESOURCE_RADIUS,
         "circle-color": ["match", ["get", "type"],
           "oil", "rgba(250,204,21,1)",
           "gas", "rgba(251,146,60,1)",
@@ -517,27 +532,126 @@
           "geo", "rgba(244,63,94,1)",
           "rgba(34,197,94,1)"
         ],
-        "circle-opacity": 0.90,
+        "circle-opacity": 0.88,
         "circle-stroke-color": "rgba(0,0,0,0.42)",
         "circle-stroke-width": 1
       }
     });
+
+    // Hover highlight ring (nice UX)
+    map.addSource("resourcesHover", { type: "geojson", data: { type:"FeatureCollection", features: [] } });
+    map.addLayer({
+      id: "resources-hover-ring",
+      type: "circle",
+      source: "resourcesHover",
+      paint: {
+        "circle-radius": [
+          "interpolate", ["exponential", 1.6], ["zoom"],
+          1.0, 10,
+          3.0, 16,
+          5.0, 22,
+          6.2, 28
+        ],
+        "circle-color": "rgba(255,255,255,0.08)",
+        "circle-stroke-color": "rgba(255,255,255,0.75)",
+        "circle-stroke-width": 2,
+        "circle-opacity": 1,
+        "circle-blur": 0.25
+      }
+    });
+
+    // cursor pointer
+    map.on("mouseenter", "resources-core", () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", "resources-core", () => { map.getCanvas().style.cursor = ""; });
   }
 
-  function addResourceMarkers() {
+  // --- Tooltip (single element, no DOM spam) ---
+  const tip = document.createElement("div");
+  tip.style.position = "absolute";
+  tip.style.zIndex = "50";
+  tip.style.pointerEvents = "none";
+  tip.style.transform = "translate(-50%, calc(-100% - 10px))";
+  tip.style.display = "none";
+  tip.style.padding = "10px 12px";
+  tip.style.borderRadius = "14px";
+  tip.style.backdropFilter = "blur(10px)";
+  tip.style.webkitBackdropFilter = "blur(10px)";
+  tip.style.background = "rgba(12, 16, 26, .78)";
+  tip.style.border = "1px solid rgba(255,255,255,.12)";
+  tip.style.boxShadow = "0 12px 28px rgba(0,0,0,.35)";
+  tip.style.color = "rgba(255,255,255,.95)";
+  tip.style.fontFamily = "Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+  tip.style.maxWidth = "260px";
+  tip.innerHTML = "";
+  document.body.appendChild(tip);
+
+  function tipShow(x, y, html) {
+    tip.innerHTML = html;
+    tip.style.left = `${x}px`;
+    tip.style.top = `${y}px`;
+    tip.style.display = "block";
+  }
+  function tipHide() {
+    tip.style.display = "none";
+  }
+
+  // HTML markers only on very close zoom (capped) — optional & lightweight
+  const resourceMarkers = []; // { marker, el, key }
+  let RESOURCE_MARKERS_ENABLED = false;
+  const RESOURCE_MARKERS_CAP = 200;
+
+  function makeResourceElement(type, name, strength) {
+    const meta = RESOURCE_META[type] || { icon: "✨" };
+
+    const wrap = document.createElement("div");
+    wrap.className = "resource-marker";
+
+    // compact mode by default (name tiny)
+    wrap.style.display = "flex";
+    wrap.style.gap = "8px";
+    wrap.style.alignItems = "center";
+    wrap.style.padding = "6px 10px";
+    wrap.style.borderRadius = "16px";
+
+    const dot = document.createElement("div");
+    dot.className = "resource-dot";
+
+    const ico = document.createElement("div");
+    ico.className = "resource-ico";
+    ico.textContent = meta.icon;
+
+    const label = document.createElement("div");
+    label.className = "resource-name";
+    label.textContent = (name || type);
+
+    const st = document.createElement("div");
+    st.className = "resource-strength";
+    st.textContent = `${Math.round((Number(strength) || 0) * 100)}%`;
+
+    // smaller labels (as you asked)
+    label.style.fontSize = "11px";
+    label.style.lineHeight = "1.05";
+    label.style.maxWidth = "110px";
+    label.style.whiteSpace = "nowrap";
+    label.style.overflow = "hidden";
+    label.style.textOverflow = "ellipsis";
+    label.style.opacity = "0.88";
+
+    st.style.fontSize = "10px";
+    st.style.opacity = "0.75";
+
+    wrap.appendChild(dot);
+    wrap.appendChild(ico);
+    wrap.appendChild(label);
+    wrap.appendChild(st);
+
+    wrap.title = `${name || type} • ${Math.round((Number(strength) || 0) * 100)}%`;
+    return wrap;
+  }
+
+  function clearResourceMarkers() {
     for (const rm of resourceMarkers) rm.marker.remove();
     resourceMarkers.length = 0;
-
-    for (const f of (RESOURCES.features || [])) {
-      const [lng, lat] = f.geometry.coordinates;
-      const el = makeResourceElement(f.properties.type, f.properties.name, f.properties.strength);
-      const marker = new maplibregl.Marker({ element: el, anchor: "center" })
-        .setLngLat([lng, lat])
-        .addTo(map);
-      resourceMarkers.push({ marker, el });
-    }
-    updateMarkerDetail();
-    updateBacksideResourcesVisibility();
   }
 
   function setResourceMarkersEnabled(enabled) {
@@ -546,17 +660,48 @@
     RESOURCE_MARKERS_ENABLED = enabled;
 
     if (!enabled) {
-      for (const rm of resourceMarkers) rm.marker.remove();
-      resourceMarkers.length = 0;
+      clearResourceMarkers();
       return;
     }
-    addResourceMarkers();
+    rebuildResourceMarkersCapped();
+  }
+
+  function rebuildResourceMarkersCapped() {
+    clearResourceMarkers();
+
+    const feats = RESOURCES.features || [];
+    if (!feats.length) return;
+
+    // choose closest-to-center first so the player sees relevant ones
+    const center = map.getCenter();
+    const clng = center.lng, clat = center.lat;
+
+    const scored = feats.map((f) => {
+      const [lng, lat] = f.geometry.coordinates;
+      // cheap score by angular distance (good enough)
+      const ang = angularDistanceRad(clng, clat, lng, lat);
+      return { f, ang };
+    }).sort((a, b) => a.ang - b.ang);
+
+    const chosen = scored.slice(0, RESOURCE_MARKERS_CAP);
+
+    for (const it of chosen) {
+      const f = it.f;
+      const [lng, lat] = f.geometry.coordinates;
+      const el = makeResourceElement(f.properties.type, f.properties.name, f.properties.strength);
+
+      const marker = new maplibregl.Marker({ element: el, anchor: "center" })
+        .setLngLat([lng, lat])
+        .addTo(map);
+
+      resourceMarkers.push({ marker, el });
+    }
+
+    updateMarkerDetail();
+    updateBacksideResourcesVisibility();
   }
 
   function updateBacksideResourcesVisibility() {
-    if (!RESOURCE_MARKERS_ENABLED) return;
-    if (resourceMarkers.length > 320) return; // safety
-
     const z = map.getZoom();
     const shouldCull = z >= 2.2;
     const center = map.getCenter();
@@ -574,37 +719,40 @@
   }
 
   // LOD loader: ask server for current viewport (bbox) and zoom
+  let lastLODKey = "";
   async function loadResourcesLOD() {
     const b = map.getBounds();
     const z = map.getZoom();
 
-    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
-      .map(v => +v.toFixed(6))
-      .join(",");
+    const bbox = [
+      b.getWest(), b.getSouth(), b.getEast(), b.getNorth()
+    ].map(v => +v.toFixed(5)).join(",");
 
-    // tuned limits (less points on mid zoom)
+    // smarter limits (avoid huge payload)
     const limit =
-      (z < 2.0) ? 500 :
-      (z < 3.0) ? 900 :
-      (z < 4.0) ? 1400 :
-      (z < 5.0) ? 2200 : 3500;
+      (z < 1.8) ? 600 :
+      (z < 2.5) ? 900 :
+      (z < 3.2) ? 1400 :
+      (z < 4.2) ? 2200 :
+      (z < 5.2) ? 3200 : 4500;
 
-    const r = await fetch(`/api/resources?bbox=${encodeURIComponent(bbox)}&zoom=${encodeURIComponent(z.toFixed(2))}&limit=${limit}`);
+    const key = `${bbox}|${z.toFixed(2)}|${limit}`;
+    if (key === lastLODKey) return; // no reload if same
+    lastLODKey = key;
+
+    const url = `/api/resources?bbox=${encodeURIComponent(bbox)}&zoom=${encodeURIComponent(z.toFixed(2))}&limit=${limit}`;
+    const r = await fetch(url);
     const j = await r.json().catch(() => ({}));
     if (j.ok && j.data) RESOURCES = j.data;
 
     if (map.getSource("resources")) map.getSource("resources").setData(RESOURCES);
 
-    // HTML markers only when few points (DOM is expensive)
-    const featureCount = (RESOURCES.features || []).length;
-    const wantHtml = (z >= 4.2) && (featureCount <= 250);
+    // DOM markers only very close zoom (keeps UI clean + fast)
+    const wantHtml = z >= 3.8;
+    setResourceMarkersEnabled(wantHtml);
 
-    const key = `${bbox}|${z.toFixed(2)}|${featureCount}|${wantHtml ? 1 : 0}`;
-    if (key !== __lastResKey) {
-      __lastResKey = key;
-      setResourceMarkersEnabled(wantHtml);
-      if (wantHtml) updateBacksideResourcesVisibility();
-    }
+    // if enabled, rebuild when data changed
+    if (wantHtml) rebuildResourceMarkersCapped();
   }
 
   // ---- Countries (MMO) ----
@@ -630,7 +778,7 @@
       source: "countries",
       paint: {
         "fill-color": ["get", "color"],
-        "fill-opacity": 0.22
+        "fill-opacity": 0.20
       }
     });
 
@@ -640,7 +788,7 @@
       source: "countries",
       paint: {
         "line-color": ["get", "color"],
-        "line-width": ["interpolate", ["linear"], ["zoom"], 1.2, 1.2, 6, 3.2],
+        "line-width": ["interpolate", ["exponential", 1.25], ["zoom"], 1.2, 1.1, 6, 3.0],
         "line-opacity": 0.88
       }
     });
@@ -652,7 +800,7 @@
       filter: ["==", ["get", "id"], -1],
       paint: {
         "line-color": "rgba(255,255,255,0.95)",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 1.2, 2.2, 6, 4.8],
+        "line-width": ["interpolate", ["exponential", 1.2], ["zoom"], 1.2, 2.0, 6, 4.8],
         "line-opacity": 0.95
       }
     });
@@ -687,7 +835,7 @@
         if (map.getLayer("countries-selected")) map.setFilter("countries-selected", ["==", ["get", "id"], -1]);
 
         hideFbMsg();
-        if (!LAND_READY) showFbMsg("ℹ️ land.geojson not found → sea/ocean restriction disabled on client (server may still block).");
+        if (!LAND_READY) showFbMsg("ℹ️ land.geojson не знайдено → клієнт не знає сушу (сервер все одно перевірить).");
 
         updateDraftEconomyUI();
       } else {
@@ -737,7 +885,7 @@
       filter: ["==", ["get", "kind"], "poly"],
       paint: {
         "fill-color": "rgba(124,58,237,0.65)",
-        "fill-opacity": 0.18
+        "fill-opacity": 0.16
       }
     });
 
@@ -748,7 +896,7 @@
       filter: ["==", ["get", "kind"], "line"],
       paint: {
         "line-color": "rgba(255,255,255,0.92)",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 1.2, 2.0, 6, 4.0],
+        "line-width": ["interpolate", ["exponential", 1.2], ["zoom"], 1.2, 2.0, 6, 4.2],
         "line-opacity": 0.96
       }
     });
@@ -759,11 +907,19 @@
       source: "draft",
       filter: ["==", ["get", "kind"], "pts"],
       paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.2, 3.2, 6, 6.4],
+        "circle-radius": [
+          "interpolate", ["exponential", 1.5], ["zoom"],
+          1.0, 3.4,
+          2.0, 4.4,
+          3.2, 6.2,
+          4.2, 8.2,
+          6.0, 10.5
+        ],
         "circle-color": "rgba(124,58,237,1)",
         "circle-opacity": 0.95,
         "circle-stroke-color": "rgba(0,0,0,0.45)",
-        "circle-stroke-width": 1
+        "circle-stroke-width": 1,
+        "circle-blur": 0.15
       }
     });
   }
@@ -951,24 +1107,22 @@
   function factoryIconEl(icon, name, level) {
     const el = document.createElement("div");
     el.className = "resource-marker";
-    el.style.padding = "7px 10px";
-    el.style.gap = "9px";
+    el.style.padding = "6px 10px";
+    el.style.gap = "8px";
 
     const dot = document.createElement("div");
     dot.className = "resource-dot";
-    dot.style.background = "rgba(124,58,237,1)";
     dot.style.boxShadow = "0 0 18px rgba(124,58,237,.35)";
 
     const ico = document.createElement("div");
     ico.className = "resource-ico";
     ico.textContent = icon || "🏭";
-    ico.style.fontSize = "15px";
 
     const label = document.createElement("div");
     label.className = "resource-name";
     label.textContent = name || "Factory";
     label.style.fontSize = "11px";
-    label.style.maxWidth = "130px";
+    label.style.maxWidth = "110px";
     label.style.whiteSpace = "nowrap";
     label.style.overflow = "hidden";
     label.style.textOverflow = "ellipsis";
@@ -977,7 +1131,7 @@
     st.className = "resource-strength";
     st.textContent = `Lv ${level || 1}`;
     st.style.fontSize = "10px";
-    st.style.opacity = "0.9";
+    st.style.opacity = "0.75";
 
     el.appendChild(dot);
     el.appendChild(ico);
@@ -1023,6 +1177,9 @@
         renderBlueprints();
         renderSelectedBlueprint();
         hideFbMsg();
+
+        // Optional: emphasize needed resources only (clean!)
+        setResourceEmphasisForBlueprint(bp);
       });
 
       fbBlueprints.appendChild(btn);
@@ -1038,6 +1195,8 @@
 
     if (!selectedBlueprint) {
       fbSelected.innerHTML = `<div class="fb-selected-empty">Select a blueprint to place it on the map.</div>`;
+      // reset resource emphasis
+      setResourceEmphasisForBlueprint(null);
       return;
     }
 
@@ -1053,6 +1212,34 @@
     `;
   }
 
+  // Emphasis: show needed resources stronger, others softer (less "noise")
+  function setResourceEmphasisForBlueprint(bp) {
+    if (!map.getLayer("resources-core") || !map.getLayer("resources-glow")) return;
+
+    const need = new Set(Object.keys(bp?.requires || {}));
+    if (!bp || need.size === 0) {
+      // normal
+      map.setPaintProperty("resources-core", "circle-opacity", 0.88);
+      map.setPaintProperty("resources-glow", "circle-opacity", ["interpolate", ["linear"], ["get", "strength"], 0.5, 0.08, 1.0, 0.18]);
+      return;
+    }
+
+    // soften everything else
+    map.setPaintProperty("resources-core", "circle-opacity",
+      ["case",
+        ["in", ["get", "type"], ["literal", Array.from(need)]], 0.92,
+        0.22
+      ]
+    );
+    map.setPaintProperty("resources-glow", "circle-opacity",
+      ["case",
+        ["in", ["get", "type"], ["literal", Array.from(need)]],
+        ["interpolate", ["linear"], ["get", "strength"], 0.5, 0.10, 1.0, 0.22],
+        0.04
+      ]
+    );
+  }
+
   async function loadFactories() {
     const r = await fetch("/api/factories", { credentials:"include" });
     const j = await r.json().catch(() => ({}));
@@ -1064,6 +1251,7 @@
     for (const m of factoryMarkers) m.marker.remove();
     factoryMarkers.length = 0;
 
+    // factories are fewer usually, OK to keep DOM markers
     for (const f of (factoriesFC.features || [])) {
       const [lng, lat] = f.geometry.coordinates;
       const p = f.properties || {};
@@ -1112,7 +1300,9 @@
     }
 
     if (typeof j.coins === "number") MY_COINS = j.coins;
-    if (myCoinsEl) myCoinsEl.textContent = `${MY_COINS} EC`;
+    const pretty = `${MY_COINS} EC`;
+    if (myCoinsEl) myCoinsEl.textContent = `💰 ${pretty}`;
+    if (topCoinsEl) topCoinsEl.textContent = `💰 ${pretty}`;
 
     const list = j.data || [];
     if (!list.length) {
@@ -1149,7 +1339,9 @@
         try {
           const res = await postJSON(`/api/factories/${f.id}/collect`, {});
           if (typeof res.coins === "number") MY_COINS = res.coins;
-          if (myCoinsEl) myCoinsEl.textContent = `${MY_COINS} EC`;
+          const p = `${MY_COINS} EC`;
+          if (myCoinsEl) myCoinsEl.textContent = `💰 ${p}`;
+          if (topCoinsEl) topCoinsEl.textContent = `💰 ${p}`;
           showFbMsg(`✅ Collected: ${res.collected || 0} EC`);
           await refreshMyFactories();
         } catch (e) {
@@ -1161,7 +1353,9 @@
         try {
           const res = await postJSON(`/api/factories/${f.id}/upgrade`, {});
           if (typeof res.coins === "number") MY_COINS = res.coins;
-          if (myCoinsEl) myCoinsEl.textContent = `${MY_COINS} EC`;
+          const p = `${MY_COINS} EC`;
+          if (myCoinsEl) myCoinsEl.textContent = `💰 ${p}`;
+          if (topCoinsEl) topCoinsEl.textContent = `💰 ${p}`;
           showFbMsg(`✅ Upgraded to Lv ${res.level}`);
           await refreshMyFactories();
           await loadFactories();
@@ -1194,7 +1388,9 @@
       const res = await postJSON("/api/factories", payload);
 
       if (typeof res.coins === "number") MY_COINS = res.coins;
-      if (myCoinsEl) myCoinsEl.textContent = `${MY_COINS} EC`;
+      const p = `${MY_COINS} EC`;
+      if (myCoinsEl) myCoinsEl.textContent = `💰 ${p}`;
+      if (topCoinsEl) topCoinsEl.textContent = `💰 ${p}`;
 
       showFbMsg(`✅ Built ${selectedBlueprint.name}!`);
       await loadFactories();
@@ -1208,13 +1404,13 @@
   function updateMarkerDetail() {
     const z = map.getZoom();
     for (const rm of resourceMarkers) {
-      if (z < 1.6) { rm.el.classList.add("tiny"); rm.el.classList.remove("small"); }
-      else if (z < 2.6) { rm.el.classList.add("small"); rm.el.classList.remove("tiny"); }
-      else { rm.el.classList.remove("small"); rm.el.classList.remove("tiny"); }
+      // clean levels
+      if (z < 3.9) rm.el.classList.add("tiny");
+      else rm.el.classList.remove("tiny");
     }
     for (const fm of factoryMarkers) {
-      if (z < 1.6) { fm.el.classList.add("tiny"); fm.el.classList.remove("small"); }
-      else if (z < 2.6) { fm.el.classList.add("small"); fm.el.classList.remove("tiny"); }
+      if (z < 2.2) { fm.el.classList.add("tiny"); fm.el.classList.remove("small"); }
+      else if (z < 3.2) { fm.el.classList.add("small"); fm.el.classList.remove("tiny"); }
       else { fm.el.classList.remove("small"); fm.el.classList.remove("tiny"); }
     }
   }
@@ -1255,49 +1451,76 @@
     map.resize();
     updateStarsVisibility(map);
     updateMarkerDetail();
-    if (RESOURCE_MARKERS_ENABLED) updateBacksideResourcesVisibility();
+    updateBacksideResourcesVisibility();
     updateBacksideFactoriesVisibility();
     updateDraftEconomyUI(true);
+
+    // Tooltip interactions for resources (fast)
+    const setHoverFeature = (feat) => {
+      const src = map.getSource("resourcesHover");
+      if (!src) return;
+      src.setData(feat ? { type:"FeatureCollection", features:[feat] } : { type:"FeatureCollection", features:[] });
+    };
+
+    map.on("mousemove", "resources-core", (e) => {
+      const f = e.features?.[0];
+      if (!f) return;
+
+      setHoverFeature(f);
+
+      const p = f.properties || {};
+      const t = p.type || "resource";
+      const nm = p.name || t;
+      const st = Math.round((Number(p.strength) || 0) * 100);
+
+      const icon = (RESOURCE_META[t]?.icon) || "✨";
+      tipShow(e.originalEvent.clientX, e.originalEvent.clientY, `
+        <div style="display:flex; gap:10px; align-items:flex-start;">
+          <div style="font-size:18px; line-height:1;">${icon}</div>
+          <div style="min-width:0;">
+            <div style="font-weight:800; font-size:13px; line-height:1.1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${nm}</div>
+            <div style="opacity:.8; font-size:12px; margin-top:4px;">Type: <b>${t}</b> • Strength: <b>${st}%</b></div>
+          </div>
+        </div>
+      `);
+    });
+
+    map.on("mouseleave", "resources-core", () => {
+      tipHide();
+      setHoverFeature(null);
+    });
   });
 
-  // ---- HUD updates (PERF) ----
+  // ---- HUD updates (throttled) ----
   function fmt(n) { return (Math.round(n * 1000) / 1000).toFixed(3); }
 
-  // light updates on mousemove, heavy updates on move/zoom via RAF
-  let hudRAF = 0;
-
-  function updateHUDLight(e) {
+  const updateHUD = rafThrottle((e) => {
     if (coordsEl && e && e.lngLat) coordsEl.textContent = `${fmt(e.lngLat.lng)}, ${fmt(e.lngLat.lat)}`;
+    if (zoomEl) zoomEl.textContent = `Zoom ${map.getZoom().toFixed(2)}`;
+
+    updateStarsVisibility(map);
+    updateMarkerDetail();
+    if (RESOURCE_MARKERS_ENABLED) updateBacksideResourcesVisibility();
+    updateBacksideFactoriesVisibility();
+
     if (mode === "create_country" && e && e.lngLat) setDraftPreview(e.lngLat.lng, e.lngLat.lat);
-  }
+    else setDraftPreview(0, 0);
+  });
 
-  function scheduleHUDHeavy() {
-    if (hudRAF) return;
-    hudRAF = requestAnimationFrame(() => {
-      hudRAF = 0;
-      if (zoomEl) zoomEl.textContent = `Zoom ${map.getZoom().toFixed(2)}`;
-      updateStarsVisibility(map);
-      updateMarkerDetail();
-      if (RESOURCE_MARKERS_ENABLED) updateBacksideResourcesVisibility();
-      updateBacksideFactoriesVisibility();
-    });
-  }
-
-  map.on("mousemove", updateHUDLight);
-  map.on("move", scheduleHUDHeavy);
-  map.on("zoom", scheduleHUDHeavy);
+  map.on("mousemove", updateHUD);
+  map.on("move", updateHUD);
+  map.on("zoom", updateHUD);
 
   map.scrollZoom.enable();
   map.dragRotate.enable();
   map.dragPan.enable();
   map.touchZoomRotate.enable();
 
-  // ---- resources refresh (debounced) ----
-  let resT = null;
-  function scheduleResourcesReload() {
-    clearTimeout(resT);
-    resT = setTimeout(() => { loadResourcesLOD().catch(()=>{}); }, 200);
-  }
+  // ---- resources refresh (debounced + moveend only) ----
+  const scheduleResourcesReload = debounce(() => {
+    loadResourcesLOD().catch(()=>{});
+  }, 200);
+
   map.on("moveend", scheduleResourcesReload);
   map.on("zoomend", scheduleResourcesReload);
 
@@ -1354,7 +1577,6 @@
     });
   }
 
-  // NOTE: in your HTML you may have 2 elements with id="fbClose".
   const fbCloseBtns = document.querySelectorAll("#fbClose");
   fbCloseBtns.forEach((b) => {
     b.addEventListener("click", () => {
@@ -1390,6 +1612,7 @@
           selectedBlueprint = BLUEPRINTS[0];
           renderBlueprints();
           renderSelectedBlueprint();
+          setResourceEmphasisForBlueprint(selectedBlueprint);
         }
       }
     });
@@ -1516,5 +1739,6 @@
 
   // ---------- INIT ----------
   setFactoriesPanel(false);
+  setMode("explore");
 
 })();
