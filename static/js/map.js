@@ -1,6 +1,7 @@
 // static/js/map.js
 // EarthCity — Globe + Resources(server, LOD) + Countries + Create Country + Factories(server)
-// CLEAN UI + FAST: no DOM spam, smart LOD, hover tooltip, capped HTML markers, smooth radius
+// OPTIMIZED: smaller resource dots, lighter glow, less lag on zoom, less DOM rebuilds
+// + NEW: Expand territory (redraw polygon) via /api/countries/<id>/update-geometry
 
 (function () {
   const $ = (id) => document.getElementById(id);
@@ -12,6 +13,7 @@
 
   // Country build UI
   const btnCreateCountry = $("btnCreateCountry");
+  const btnExpandCountry = $("btnExpandCountry"); // optional new button in topbar
   const buildActions = $("buildActions");
   const btnUndo = $("btnUndo");
   const btnCancel = $("btnCancel");
@@ -28,20 +30,20 @@
   // Stats
   const draftAreaEl = $("draftArea");
   const draftCostEl = $("draftCost");
-  const myCoinsEl = $("myCoins");           // sidebar pill
-  const myCoinsModalEl = $("myCoinsModal"); // modal coins
+  const myCoinsEl = $("myCoins");
+  const myCoinsModalEl = $("myCoinsModal");
   const topCoinsEl = $("topCoins");
 
   // Left factory sidebar
   const factorybar = $("factorybar");
-  const fbToggle = $("fbToggle"); // optional
+  const fbToggle = $("fbToggle");
   const fbSub = $("fbSub");
   const fbMsg = $("fbMsg");
   const fbBlueprints = $("fbBlueprints");
   const fbSelected = $("fbSelected");
   const fbMyFactories = $("fbMyFactories");
   const btnFactoryMode = $("btnFactoryMode");
-  const btnCancelFactoryMode = $("btnCancelFactoryMode"); // optional
+  const btnCancelFactoryMode = $("btnCancelFactoryMode");
   const btnTipFactory = $("btnTipFactory");
   const fbTip = $("fbTip");
 
@@ -50,17 +52,17 @@
 
   // ---- Stars background ----
   if (starsEl) {
-    const N = 220;
+    const N = 200;
     for (let i = 0; i < N; i++) {
       const s = document.createElement("div");
       s.className = "star";
-      s.style.left = (Math.random() * 100) + "%";
-      s.style.top = (Math.random() * 100) + "%";
-      const size = 1 + Math.random() * 2.3;
+      s.style.left = Math.random() * 100 + "%";
+      s.style.top = Math.random() * 100 + "%";
+      const size = 1 + Math.random() * 2.0;
       s.style.width = size + "px";
       s.style.height = size + "px";
-      s.style.animationDelay = (Math.random() * 4) + "s";
-      s.style.opacity = String(0.22 + Math.random() * 0.78);
+      s.style.animationDelay = Math.random() * 4 + "s";
+      s.style.opacity = String(0.22 + Math.random() * 0.68);
       starsEl.appendChild(s);
     }
   }
@@ -75,7 +77,7 @@
 
   // ---- Helpers ----
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  function rad(d) { return d * Math.PI / 180; }
+  function rad(d) { return (d * Math.PI) / 180; }
 
   function angularDistanceRad(lng1, lat1, lng2, lat2) {
     const φ1 = rad(lat1), φ2 = rad(lat2);
@@ -127,7 +129,6 @@
     fbMsg.textContent = "";
   }
 
-  // Debounce
   function debounce(fn, ms) {
     let t = null;
     return (...args) => {
@@ -136,7 +137,6 @@
     };
   }
 
-  // RAF throttle (for HUD)
   function rafThrottle(fn) {
     let raf = 0;
     let lastArgs = null;
@@ -175,7 +175,7 @@
     const r = await fetch("/api/me", { credentials: "include" });
     const j = await r.json().catch(() => ({}));
     ME = j || { authenticated: false };
-    MY_COINS = (j && typeof j.coins === "number") ? j.coins : 0;
+    MY_COINS = j && typeof j.coins === "number" ? j.coins : 0;
 
     const pretty = `${MY_COINS} EC`;
     if (myCoinsEl) myCoinsEl.textContent = `💰 ${pretty}`;
@@ -184,7 +184,9 @@
   }
 
   function computeCountryCost(areaKm2) {
-    return Math.round(RULES.country_base_cost + (areaKm2 / 1000) * RULES.country_cost_per_1000_km2);
+    return Math.round(
+      RULES.country_base_cost + (areaKm2 / 1000) * RULES.country_cost_per_1000_km2
+    );
   }
 
   // ---- Map style ----
@@ -255,7 +257,6 @@
   function landRingsFromGeometry(geom) {
     const rings = [];
     if (!geom || typeof geom !== "object") return rings;
-
     const t = geom.type;
     const c = geom.coordinates;
 
@@ -277,8 +278,9 @@
     for (let i = 0; i < n; i++) {
       const xi = ring[i][0], yi = ring[i][1];
       const xj = ring[j][0], yj = ring[j][1];
-      const intersect = ((yi > lat) !== (yj > lat)) &&
-        (lng < (xj - xi) * (lat - yi) / ((yj - yi) || 1e-12) + xi);
+      const intersect =
+        (yi > lat) !== (yj > lat) &&
+        lng < ((xj - xi) * (lat - yi)) / ((yj - yi) || 1e-12) + xi;
       if (intersect) inside = !inside;
       j = i;
     }
@@ -287,9 +289,8 @@
 
   function isPointOnLand(lng, lat) {
     if (!LAND_READY) return null; // unknown
-    for (const f of (LAND.features || [])) {
-      const geom = f && f.geometry;
-      const rings = landRingsFromGeometry(geom);
+    for (const f of LAND.features || []) {
+      const rings = landRingsFromGeometry(f && f.geometry);
       for (const ring of rings) {
         if (pointInRing(lng, lat, ring)) return true;
       }
@@ -310,12 +311,12 @@
   // =========================================================
   // Country-on-country overlap check (client-side)
   // =========================================================
-  function orient(a, b, c) {
-    return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]);
-  }
+  function orient(a, b, c) { return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]); }
   function onSegment(a, b, c) {
-    return (Math.min(a[0], b[0]) <= c[0] && c[0] <= Math.max(a[0], b[0]) &&
-            Math.min(a[1], b[1]) <= c[1] && c[1] <= Math.max(a[1], b[1]));
+    return (
+      Math.min(a[0], b[0]) <= c[0] && c[0] <= Math.max(a[0], b[0]) &&
+      Math.min(a[1], b[1]) <= c[1] && c[1] <= Math.max(a[1], b[1])
+    );
   }
   function segmentsIntersect(p1, p2, q1, q2) {
     const o1 = orient(p1, p2, q1);
@@ -330,7 +331,6 @@
     if (Math.abs(o2) < eps && onSegment(p1, p2, q2)) return true;
     if (Math.abs(o3) < eps && onSegment(q1, q2, p1)) return true;
     if (Math.abs(o4) < eps && onSegment(q1, q2, p2)) return true;
-
     return false;
   }
 
@@ -350,19 +350,20 @@
 
     if (pointInRing(B[0][0], B[0][1], ringAClosed)) return true;
     if (pointInRing(A[0][0], A[0][1], ringBClosed)) return true;
-
     return false;
   }
 
-  function draftIntersectsAnyCountry() {
+  function draftIntersectsAnyCountry(excludeCountryId = null) {
     if (draftPoints.length < 3) return false;
-    const ring = draftPoints.map(p => [p.lng, p.lat]);
+    const ring = draftPoints.map((p) => [p.lng, p.lat]);
     const closed = ring.concat([ring[0]]);
 
-    const feats = (countriesFC && countriesFC.features) ? countriesFC.features : [];
+    const feats = countriesFC && countriesFC.features ? countriesFC.features : [];
     for (const f of feats) {
-      const g = f && f.geometry;
-      const ring2 = g && g.coordinates && g.coordinates[0];
+      const id = Number(f?.properties?.id ?? f?.id ?? -1);
+      if (excludeCountryId && id === Number(excludeCountryId)) continue;
+
+      const ring2 = f?.geometry?.coordinates?.[0];
       if (!ring2 || ring2.length < 4) continue;
       if (ringsIntersect(closed, ring2)) return true;
     }
@@ -385,27 +386,27 @@
       source: "draftPreview",
       paint: {
         "circle-radius": [
-          "interpolate", ["exponential", 1.45], ["zoom"],
-          1.0, 5,
-          2.2, 7,
-          3.2, 10,
-          4.2, 14,
-          6.0, 18
+          "interpolate", ["linear"], ["zoom"],
+          1.0, 3.2,
+          2.2, 4.2,
+          4.2, 6.0,
+          6.2, 7.0
         ],
-        "circle-color": ["case",
+        "circle-color": [
+          "case",
           ["==", ["get", "ok"], 1], "rgba(34,197,94,1)",
           "rgba(239,68,68,1)"
         ],
         "circle-opacity": 0.92,
         "circle-stroke-color": "rgba(0,0,0,0.55)",
         "circle-stroke-width": 1,
-        "circle-blur": 0.18
+        "circle-blur": 0.15
       }
     });
   }
 
   function setDraftPreview(lng, lat) {
-    if (mode !== "create_country") {
+    if (mode !== "create_country" && mode !== "expand_country") {
       if (DRAFT_PREVIEW.features.length) {
         DRAFT_PREVIEW.features = [];
         if (map.getSource("draftPreview")) map.getSource("draftPreview").setData(DRAFT_PREVIEW);
@@ -432,48 +433,47 @@
   // =========================================================
   // RESOURCES (server) + CLEAN LOD
   // =========================================================
-  let RESOURCES = { type:"FeatureCollection", features: [] };
+  let RESOURCES = { type: "FeatureCollection", features: [] };
 
   const RESOURCE_META = {
-    oil:      { icon: "🛢️" },
-    gas:      { icon: "🔥"  },
-    iron:     { icon: "⛏️"  },
-    gold:     { icon: "🪙"  },
-    coal:     { icon: "🪨"  },
-    uranium:  { icon: "☢️"  },
-    rare:     { icon: "💎"  },
-    water:    { icon: "💧"  },
-    farmland: { icon: "🌾"  },
-    fish:     { icon: "🐟"  },
-    wind:     { icon: "🌬️"  },
-    solar:    { icon: "☀️"  },
-    hydro:    { icon: "🌊"  },
-    geo:      { icon: "🌋"  }
+    oil: { icon: "🛢️" },
+    gas: { icon: "🔥" },
+    iron: { icon: "⛏️" },
+    gold: { icon: "🪙" },
+    coal: { icon: "🪨" },
+    uranium: { icon: "☢️" },
+    rare: { icon: "💎" },
+    water: { icon: "💧" },
+    farmland: { icon: "🌾" },
+    fish: { icon: "🐟" },
+    wind: { icon: "🌬️" },
+    solar: { icon: "☀️" },
+    hydro: { icon: "🌊" },
+    geo: { icon: "🌋" }
   };
 
-  // Smooth radius (prettier when zooming)
   const RESOURCE_RADIUS = [
-    "interpolate", ["exponential", 1.55], ["zoom"],
-    0.8, 1.2,
-    1.3, 1.6,
-    1.7, 2.2,
-    2.2, 3.2,
-    2.8, 4.6,
-    3.4, 6.2,
-    4.2, 8.6,
-    5.0, 11.8,
-    6.2, 14.5
+    "interpolate", ["exponential", 1.45], ["zoom"],
+    0.8, 0.7,
+    1.3, 0.9,
+    1.7, 1.2,
+    2.2, 1.55,
+    2.8, 2.1,
+    3.4, 2.8,
+    4.2, 3.6,
+    5.0, 4.4,
+    6.2, 5.2
   ];
 
   const RESOURCE_GLOW_RADIUS = [
-    "interpolate", ["exponential", 1.6], ["zoom"],
-    0.8, 4,
-    1.5, 8,
-    2.2, 14,
-    3.0, 22,
-    4.2, 34,
-    5.2, 46,
-    6.2, 58
+    "interpolate", ["exponential", 1.5], ["zoom"],
+    0.8, 2.0,
+    1.5, 3.5,
+    2.2, 5.5,
+    3.0, 8.0,
+    4.2, 11.0,
+    5.2, 14.0,
+    6.2, 16.0
   ];
 
   function addResourceLayers() {
@@ -488,24 +488,24 @@
       paint: {
         "circle-radius": RESOURCE_GLOW_RADIUS,
         "circle-color": ["match", ["get", "type"],
-          "oil", "rgba(250,204,21,0.95)",
-          "gas", "rgba(251,146,60,0.95)",
-          "iron", "rgba(148,163,184,0.95)",
-          "gold", "rgba(251,191,36,0.98)",
-          "coal", "rgba(148,163,184,0.92)",
-          "uranium", "rgba(34,197,94,0.95)",
-          "rare", "rgba(167,139,250,0.98)",
-          "water", "rgba(59,130,246,0.98)",
-          "farmland", "rgba(34,197,94,0.92)",
-          "fish", "rgba(56,189,248,0.96)",
-          "wind", "rgba(196,181,253,0.96)",
-          "solar", "rgba(253,164,175,0.96)",
-          "hydro", "rgba(59,130,246,0.96)",
-          "geo", "rgba(244,63,94,0.96)",
-          "rgba(34,197,94,0.95)"
+          "oil", "rgba(250,204,21,0.9)",
+          "gas", "rgba(251,146,60,0.9)",
+          "iron", "rgba(148,163,184,0.9)",
+          "gold", "rgba(251,191,36,0.9)",
+          "coal", "rgba(148,163,184,0.9)",
+          "uranium", "rgba(34,197,94,0.9)",
+          "rare", "rgba(167,139,250,0.9)",
+          "water", "rgba(59,130,246,0.9)",
+          "farmland", "rgba(34,197,94,0.9)",
+          "fish", "rgba(56,189,248,0.9)",
+          "wind", "rgba(196,181,253,0.9)",
+          "solar", "rgba(253,164,175,0.9)",
+          "hydro", "rgba(59,130,246,0.9)",
+          "geo", "rgba(244,63,94,0.9)",
+          "rgba(34,197,94,0.9)"
         ],
-        "circle-opacity": ["interpolate", ["linear"], ["get", "strength"], 0.5, 0.08, 1.0, 0.18],
-        "circle-blur": 1.05
+        "circle-opacity": ["interpolate", ["linear"], ["get", "strength"], 0.35, 0.03, 1.0, 0.10],
+        "circle-blur": 0.95
       }
     });
 
@@ -532,40 +532,39 @@
           "geo", "rgba(244,63,94,1)",
           "rgba(34,197,94,1)"
         ],
-        "circle-opacity": 0.88,
-        "circle-stroke-color": "rgba(0,0,0,0.42)",
-        "circle-stroke-width": 1
+        "circle-opacity": 0.90,
+        "circle-stroke-color": "rgba(0,0,0,0.40)",
+        "circle-stroke-width": 1,
+        "circle-blur": 0.05
       }
     });
 
-    // Hover highlight ring (nice UX)
-    map.addSource("resourcesHover", { type: "geojson", data: { type:"FeatureCollection", features: [] } });
+    map.addSource("resourcesHover", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
     map.addLayer({
       id: "resources-hover-ring",
       type: "circle",
       source: "resourcesHover",
       paint: {
         "circle-radius": [
-          "interpolate", ["exponential", 1.6], ["zoom"],
-          1.0, 10,
-          3.0, 16,
-          5.0, 22,
-          6.2, 28
+          "interpolate", ["linear"], ["zoom"],
+          1.0, 7,
+          3.0, 10,
+          5.0, 14,
+          6.2, 16
         ],
-        "circle-color": "rgba(255,255,255,0.08)",
+        "circle-color": "rgba(255,255,255,0.06)",
         "circle-stroke-color": "rgba(255,255,255,0.75)",
         "circle-stroke-width": 2,
         "circle-opacity": 1,
-        "circle-blur": 0.25
+        "circle-blur": 0.18
       }
     });
 
-    // cursor pointer
     map.on("mouseenter", "resources-core", () => { map.getCanvas().style.cursor = "pointer"; });
     map.on("mouseleave", "resources-core", () => { map.getCanvas().style.cursor = ""; });
   }
 
-  // --- Tooltip (single element, no DOM spam) ---
+  // --- Tooltip (single element) ---
   const tip = document.createElement("div");
   tip.style.position = "absolute";
   tip.style.zIndex = "50";
@@ -591,26 +590,40 @@
     tip.style.top = `${y}px`;
     tip.style.display = "block";
   }
-  function tipHide() {
-    tip.style.display = "none";
+  function tipHide() { tip.style.display = "none"; }
+
+  // HTML markers: DISABLED by default for performance (only if super close zoom)
+  const resourceMarkers = [];
+  let RESOURCE_MARKERS_ENABLED = false;
+  const RESOURCE_MARKERS_CAP = 120;
+  let lastMarkersKey = "";
+
+  function clearResourceMarkers() {
+    for (const rm of resourceMarkers) rm.marker.remove();
+    resourceMarkers.length = 0;
   }
 
-  // HTML markers only on very close zoom (capped) — optional & lightweight
-  const resourceMarkers = []; // { marker, el, key }
-  let RESOURCE_MARKERS_ENABLED = false;
-  const RESOURCE_MARKERS_CAP = 200;
+  function setResourceMarkersEnabled(enabled) {
+    enabled = !!enabled;
+    if (RESOURCE_MARKERS_ENABLED === enabled) return;
+    RESOURCE_MARKERS_ENABLED = enabled;
+    if (!enabled) {
+      clearResourceMarkers();
+      lastMarkersKey = "";
+      return;
+    }
+    rebuildResourceMarkersCapped();
+  }
 
   function makeResourceElement(type, name, strength) {
     const meta = RESOURCE_META[type] || { icon: "✨" };
-
     const wrap = document.createElement("div");
     wrap.className = "resource-marker";
 
-    // compact mode by default (name tiny)
     wrap.style.display = "flex";
     wrap.style.gap = "8px";
     wrap.style.alignItems = "center";
-    wrap.style.padding = "6px 10px";
+    wrap.style.padding = "5px 9px";
     wrap.style.borderRadius = "16px";
 
     const dot = document.createElement("div");
@@ -622,13 +635,12 @@
 
     const label = document.createElement("div");
     label.className = "resource-name";
-    label.textContent = (name || type);
+    label.textContent = name || type;
 
     const st = document.createElement("div");
     st.className = "resource-strength";
     st.textContent = `${Math.round((Number(strength) || 0) * 100)}%`;
 
-    // smaller labels (as you asked)
     label.style.fontSize = "11px";
     label.style.lineHeight = "1.05";
     label.style.maxWidth = "110px";
@@ -649,42 +661,32 @@
     return wrap;
   }
 
-  function clearResourceMarkers() {
-    for (const rm of resourceMarkers) rm.marker.remove();
-    resourceMarkers.length = 0;
-  }
-
-  function setResourceMarkersEnabled(enabled) {
-    enabled = !!enabled;
-    if (RESOURCE_MARKERS_ENABLED === enabled) return;
-    RESOURCE_MARKERS_ENABLED = enabled;
-
-    if (!enabled) {
+  function rebuildResourceMarkersCapped() {
+    const feats = RESOURCES.features || [];
+    const z = map.getZoom();
+    if (z < 6.0 || !feats.length) {
       clearResourceMarkers();
+      lastMarkersKey = "";
       return;
     }
-    rebuildResourceMarkersCapped();
-  }
 
-  function rebuildResourceMarkersCapped() {
+    const center = map.getCenter();
+    const key = `${feats.length}|${center.lng.toFixed(2)}|${center.lat.toFixed(2)}|${z.toFixed(2)}`;
+    if (key === lastMarkersKey && resourceMarkers.length) return;
+    lastMarkersKey = key;
+
     clearResourceMarkers();
 
-    const feats = RESOURCES.features || [];
-    if (!feats.length) return;
-
-    // choose closest-to-center first so the player sees relevant ones
-    const center = map.getCenter();
     const clng = center.lng, clat = center.lat;
-
-    const scored = feats.map((f) => {
-      const [lng, lat] = f.geometry.coordinates;
-      // cheap score by angular distance (good enough)
-      const ang = angularDistanceRad(clng, clat, lng, lat);
-      return { f, ang };
-    }).sort((a, b) => a.ang - b.ang);
+    const scored = feats
+      .map((f) => {
+        const [lng, lat] = f.geometry.coordinates;
+        const ang = angularDistanceRad(clng, clat, lng, lat);
+        return { f, ang };
+      })
+      .sort((a, b) => a.ang - b.ang);
 
     const chosen = scored.slice(0, RESOURCE_MARKERS_CAP);
-
     for (const it of chosen) {
       const f = it.f;
       const [lng, lat] = f.geometry.coordinates;
@@ -696,48 +698,27 @@
 
       resourceMarkers.push({ marker, el });
     }
-
-    updateMarkerDetail();
-    updateBacksideResourcesVisibility();
   }
 
-  function updateBacksideResourcesVisibility() {
-    const z = map.getZoom();
-    const shouldCull = z >= 2.2;
-    const center = map.getCenter();
-    const clng = center.lng, clat = center.lat;
-
-    for (const rm of resourceMarkers) {
-      const ll = rm.marker.getLngLat();
-      let visible = true;
-      if (shouldCull) {
-        const ang = angularDistanceRad(clng, clat, ll.lng, ll.lat);
-        visible = ang <= (Math.PI / 2);
-      }
-      rm.el.style.display = visible ? "" : "none";
-    }
-  }
-
-  // LOD loader: ask server for current viewport (bbox) and zoom
+  // LOD loader
   let lastLODKey = "";
   async function loadResourcesLOD() {
     const b = map.getBounds();
     const z = map.getZoom();
 
-    const bbox = [
-      b.getWest(), b.getSouth(), b.getEast(), b.getNorth()
-    ].map(v => +v.toFixed(5)).join(",");
+    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
+      .map((v) => +v.toFixed(5))
+      .join(",");
 
-    // smarter limits (avoid huge payload)
     const limit =
-      (z < 1.8) ? 600 :
-      (z < 2.5) ? 900 :
-      (z < 3.2) ? 1400 :
-      (z < 4.2) ? 2200 :
-      (z < 5.2) ? 3200 : 4500;
+      z < 1.8 ? 600 :
+      z < 2.5 ? 900 :
+      z < 3.2 ? 1400 :
+      z < 4.2 ? 2200 :
+      z < 5.2 ? 3200 : 4500;
 
     const key = `${bbox}|${z.toFixed(2)}|${limit}`;
-    if (key === lastLODKey) return; // no reload if same
+    if (key === lastLODKey) return;
     lastLODKey = key;
 
     const url = `/api/resources?bbox=${encodeURIComponent(bbox)}&zoom=${encodeURIComponent(z.toFixed(2))}&limit=${limit}`;
@@ -747,11 +728,8 @@
 
     if (map.getSource("resources")) map.getSource("resources").setData(RESOURCES);
 
-    // DOM markers only very close zoom (keeps UI clean + fast)
-    const wantHtml = z >= 3.8;
+    const wantHtml = z >= 6.0;
     setResourceMarkersEnabled(wantHtml);
-
-    // if enabled, rebuild when data changed
     if (wantHtml) rebuildResourceMarkersCapped();
   }
 
@@ -816,20 +794,23 @@
     });
   }
 
-  // ---- Draft (Create Country) ----
-  let mode = "explore"; // explore | create_country | factory_build
+  // ---- Draft (Create/Expand Country) ----
+  let mode = "explore"; // explore | create_country | expand_country | factory_build
   let draftPoints = [];
+
+  let EXPAND_TARGET = { countryId: null, oldAreaKm2: 0, oldCost: 0 };
 
   const DRAFT = { type: "FeatureCollection", features: [] };
 
   function setMode(m) {
     mode = m;
 
-    // country build UI
     if (btnCreateCountry && buildActions) {
-      if (mode === "create_country") {
+      if (mode === "create_country" || mode === "expand_country") {
         buildActions.style.display = "flex";
-        btnCreateCountry.style.display = "none";
+        if (btnCreateCountry) btnCreateCountry.style.display = "none";
+        if (btnExpandCountry) btnExpandCountry.style.display = "none";
+
         map.getCanvas().style.cursor = "crosshair";
         selectedCountryId = null;
         if (map.getLayer("countries-selected")) map.setFilter("countries-selected", ["==", ["get", "id"], -1]);
@@ -840,20 +821,21 @@
         updateDraftEconomyUI();
       } else {
         buildActions.style.display = "none";
-        btnCreateCountry.style.display = "inline-flex";
+        if (btnCreateCountry) btnCreateCountry.style.display = "inline-flex";
+        if (btnExpandCountry) btnExpandCountry.style.display = "inline-flex";
         map.getCanvas().style.cursor = "";
         clearDraft();
         updateDraftEconomyUI(true);
       }
     }
 
-    // factories UI
     if (fbSub) {
-      fbSub.textContent =
-        (mode === "factory_build") ? "Build mode: ON (click inside your country)" : "Build mode: off";
+      fbSub.textContent = mode === "factory_build"
+        ? "Build mode: ON (click inside your country)"
+        : "Build mode: off";
     }
-    if (btnCancelFactoryMode) btnCancelFactoryMode.style.display = (mode === "factory_build") ? "inline-flex" : "none";
-    if (btnTipFactory) btnTipFactory.style.display = (mode === "factory_build") ? "inline-flex" : "none";
+    if (btnCancelFactoryMode) btnCancelFactoryMode.style.display = mode === "factory_build" ? "inline-flex" : "none";
+    if (btnTipFactory) btnTipFactory.style.display = mode === "factory_build" ? "inline-flex" : "none";
 
     if (mode !== "factory_build") {
       selectedBlueprint = null;
@@ -861,7 +843,7 @@
       hideFbMsg();
     }
 
-    if (mode !== "create_country") setDraftPreview(0, 0);
+    if (mode !== "create_country" && mode !== "expand_country") setDraftPreview(0, 0);
   }
 
   function clearDraft() {
@@ -909,23 +891,23 @@
       paint: {
         "circle-radius": [
           "interpolate", ["exponential", 1.5], ["zoom"],
-          1.0, 3.4,
-          2.0, 4.4,
-          3.2, 6.2,
-          4.2, 8.2,
-          6.0, 10.5
+          1.0, 3.0,
+          2.0, 4.0,
+          3.2, 5.4,
+          4.2, 7.2,
+          6.0, 9.2
         ],
         "circle-color": "rgba(124,58,237,1)",
         "circle-opacity": 0.95,
         "circle-stroke-color": "rgba(0,0,0,0.45)",
         "circle-stroke-width": 1,
-        "circle-blur": 0.15
+        "circle-blur": 0.10
       }
     });
   }
 
   function refreshDraftSource() {
-    const coords = draftPoints.map(p => [p.lng, p.lat]);
+    const coords = draftPoints.map((p) => [p.lng, p.lat]);
     DRAFT.features = [];
 
     if (coords.length) {
@@ -973,20 +955,33 @@
       return;
     }
 
-    const coords = draftPoints.map(p => [p.lng, p.lat]);
+    const coords = draftPoints.map((p) => [p.lng, p.lat]);
     const closed = coords.concat([coords[0]]);
     const area = polygonAreaKm2(closed);
     const cost = computeCountryCost(area);
 
     if (draftAreaEl) draftAreaEl.textContent = formatKm2(area);
-    if (draftCostEl) draftCostEl.textContent = `${cost} EC`;
+
+    let shownCost = cost;
+    let titlePrefix = "";
+    if (mode === "expand_country" && EXPAND_TARGET.countryId) {
+      const oldCost = EXPAND_TARGET.oldCost || computeCountryCost(EXPAND_TARGET.oldAreaKm2 || 0);
+      const delta = Math.max(0, cost - oldCost);
+      shownCost = delta;
+      titlePrefix = "Δ ";
+    }
+
+    if (draftCostEl) draftCostEl.textContent = `${titlePrefix}${shownCost} EC`;
 
     const tooBig = area > RULES.country_max_area_km2;
     const tooMany = draftPoints.length > RULES.country_max_points;
-    const tooPoor = MY_COINS < cost;
 
-    const notOnLand = (isDraftOnLand() === false);
-    const overlaps = draftIntersectsAnyCountry();
+    const notOnLand = isDraftOnLand() === false;
+    const overlaps = mode === "expand_country"
+      ? draftIntersectsAnyCountry(EXPAND_TARGET.countryId)
+      : draftIntersectsAnyCountry(null);
+
+    const tooPoor = MY_COINS < shownCost;
 
     if (btnFinish) {
       btnFinish.disabled = tooBig || tooMany || tooPoor || notOnLand || overlaps;
@@ -996,14 +991,14 @@
       if (tooBig) title = `Too big (max ${RULES.country_max_area_km2.toLocaleString("en-US")} km²)`;
       else if (tooMany) title = `Too many points (max ${RULES.country_max_points})`;
       else if (tooPoor) title = "Not enough coins";
-      else if (notOnLand) title = "Country must be on land (not sea/ocean)";
-      else if (overlaps) title = "Cannot place on another country (overlap)";
+      else if (notOnLand) title = "Must be on land";
+      else if (overlaps) title = "Cannot overlap other countries";
       btnFinish.title = title;
     }
 
-    if (mode === "create_country") {
-      if (notOnLand) showFbMsg("🔴 Не можна створювати країну на морі/океані. Став точки на суші (зелена зона).");
-      else if (overlaps) showFbMsg("⛔ Не можна створювати країну на країні. Твій полігон перетинає іншу країну.");
+    if (mode === "create_country" || mode === "expand_country") {
+      if (notOnLand) showFbMsg("🔴 Став точки на суші (зелена зона).");
+      else if (overlaps) showFbMsg("⛔ Перетин з іншою країною. Не можна.");
       else hideFbMsg();
     }
   }
@@ -1011,9 +1006,25 @@
   // ---- Modal helpers ----
   function openCountrySaveModal() {
     if (!countryOverlay) return;
+
     if (countryMsg) { countryMsg.style.display = "none"; countryMsg.textContent = ""; }
-    if (countryName) countryName.value = "";
-    if (countryColor) countryColor.value = "#7c3aed";
+
+    if (mode === "create_country") {
+      if (countryName) countryName.value = "";
+      if (countryColor) countryColor.value = "#7c3aed";
+      if (countryName) countryName.disabled = false;
+      if (countryColor) countryColor.disabled = false;
+    } else if (mode === "expand_country") {
+      if (countryName) {
+        countryName.value = "Territory expand";
+        countryName.disabled = true;
+      }
+      if (countryColor) {
+        countryColor.value = "#7c3aed";
+        countryColor.disabled = true;
+      }
+    }
+
     countryOverlay.style.display = "flex";
     setTimeout(() => countryName && countryName.focus(), 50);
     updateDraftEconomyUI();
@@ -1023,6 +1034,8 @@
     if (!countryOverlay) return;
     countryOverlay.style.display = "none";
     setTimeout(() => map.resize(), 50);
+    if (countryName) countryName.disabled = false;
+    if (countryColor) countryColor.disabled = false;
   }
 
   // ---- Networking helpers ----
@@ -1038,58 +1051,78 @@
     return data;
   }
 
-  async function saveCountry() {
+  async function saveCountryOrExpand() {
     if (draftPoints.length < 3) return;
 
     const onLand = isDraftOnLand();
     if (onLand === false) {
-      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Країну можна створювати лише на суші (не на морі/океані)."; }
-      return;
-    }
-    if (draftIntersectsAnyCountry()) {
-      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Не можна створювати країну на країні (перетин з іншою країною)."; }
+      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Лише суша (не море/океан)."; }
       return;
     }
 
-    const name = (countryName?.value || "").trim();
-    const color = (countryColor?.value || "#7c3aed").trim();
-
-    if (name.length < 2) {
-      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Назва мінімум 2 символи."; }
-      return;
-    }
-
-    const coords = draftPoints.map(p => [p.lng, p.lat]);
+    const coords = draftPoints.map((p) => [p.lng, p.lat]);
     const closed = coords.concat([coords[0]]);
     const area = polygonAreaKm2(closed);
     const cost = computeCountryCost(area);
 
-    if (area > RULES.country_max_area_km2) {
-      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Країна завелика. Зменш полігон."; }
-      return;
-    }
-    if (draftPoints.length > RULES.country_max_points) {
-      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Забагато точок. Зменш."; }
-      return;
-    }
-    if (MY_COINS < cost) {
-      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Недостатньо монет."; }
+    const overlaps = mode === "expand_country"
+      ? draftIntersectsAnyCountry(EXPAND_TARGET.countryId)
+      : draftIntersectsAnyCountry(null);
+
+    if (overlaps) {
+      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Перетин з іншою країною."; }
       return;
     }
 
-    const payload = { name, color, geometry: { type: "Polygon", coordinates: [closed] } };
+    if (area > RULES.country_max_area_km2) {
+      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Занадто велика."; }
+      return;
+    }
+    if (draftPoints.length > RULES.country_max_points) {
+      if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Забагато точок."; }
+      return;
+    }
 
     if (btnSaveCountry) btnSaveCountry.disabled = true;
 
     try {
-      const res = await postJSON("/api/countries", payload);
-      if (res && typeof res.coins === "number") MY_COINS = res.coins;
+      if (mode === "create_country") {
+        const name = (countryName?.value || "").trim();
+        const color = (countryColor?.value || "#7c3aed").trim();
+
+        if (name.length < 2) {
+          if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Назва мінімум 2 символи."; }
+          return;
+        }
+        if (MY_COINS < cost) {
+          if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Недостатньо монет."; }
+          return;
+        }
+
+        const payload = { name, color, geometry: { type: "Polygon", coordinates: [closed] } };
+        const res = await postJSON("/api/countries", payload);
+        if (res && typeof res.coins === "number") MY_COINS = res.coins;
+
+      } else if (mode === "expand_country") {
+        const oldCost = EXPAND_TARGET.oldCost || computeCountryCost(EXPAND_TARGET.oldAreaKm2 || 0);
+        const delta = Math.max(0, cost - oldCost);
+
+        if (MY_COINS < delta) {
+          if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Недостатньо монет на розширення."; }
+          return;
+        }
+
+        const payload = { geometry: { type: "Polygon", coordinates: [closed] } };
+        const res = await postJSON(`/api/countries/${EXPAND_TARGET.countryId}/update-geometry`, payload);
+        if (res && typeof res.coins === "number") MY_COINS = res.coins;
+      }
 
       closeCountrySaveModal();
       setMode("explore");
       await loadCountries();
       await refreshMe();
       await refreshMyFactories();
+
     } catch (err) {
       if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = err.message; }
     } finally {
@@ -1101,8 +1134,8 @@
   let BLUEPRINTS = [];
   let selectedBlueprint = null;
 
-  let factoriesFC = { type:"FeatureCollection", features:[] };
-  const factoryMarkers = []; // { marker, el }
+  let factoriesFC = { type: "FeatureCollection", features: [] };
+  const factoryMarkers = [];
 
   function factoryIconEl(icon, name, level) {
     const el = document.createElement("div");
@@ -1112,7 +1145,7 @@
 
     const dot = document.createElement("div");
     dot.className = "resource-dot";
-    dot.style.boxShadow = "0 0 18px rgba(124,58,237,.35)";
+    dot.style.boxShadow = "0 0 14px rgba(124,58,237,.28)";
 
     const ico = document.createElement("div");
     ico.className = "resource-ico";
@@ -1141,9 +1174,9 @@
   }
 
   async function loadBlueprints() {
-    const r = await fetch("/api/blueprints", { credentials:"include" });
+    const r = await fetch("/api/blueprints", { credentials: "include" });
     const j = await r.json().catch(() => ({}));
-    BLUEPRINTS = (j.ok && Array.isArray(j.data)) ? j.data : [];
+    BLUEPRINTS = j.ok && Array.isArray(j.data) ? j.data : [];
     renderBlueprints();
   }
 
@@ -1177,8 +1210,6 @@
         renderBlueprints();
         renderSelectedBlueprint();
         hideFbMsg();
-
-        // Optional: emphasize needed resources only (clean!)
         setResourceEmphasisForBlueprint(bp);
       });
 
@@ -1195,7 +1226,6 @@
 
     if (!selectedBlueprint) {
       fbSelected.innerHTML = `<div class="fb-selected-empty">Select a blueprint to place it on the map.</div>`;
-      // reset resource emphasis
       setResourceEmphasisForBlueprint(null);
       return;
     }
@@ -1212,38 +1242,37 @@
     `;
   }
 
-  // Emphasis: show needed resources stronger, others softer (less "noise")
   function setResourceEmphasisForBlueprint(bp) {
     if (!map.getLayer("resources-core") || !map.getLayer("resources-glow")) return;
 
     const need = new Set(Object.keys(bp?.requires || {}));
     if (!bp || need.size === 0) {
-      // normal
-      map.setPaintProperty("resources-core", "circle-opacity", 0.88);
-      map.setPaintProperty("resources-glow", "circle-opacity", ["interpolate", ["linear"], ["get", "strength"], 0.5, 0.08, 1.0, 0.18]);
+      map.setPaintProperty("resources-core", "circle-opacity", 0.90);
+      map.setPaintProperty("resources-glow", "circle-opacity",
+        ["interpolate", ["linear"], ["get", "strength"], 0.35, 0.03, 1.0, 0.10]
+      );
       return;
     }
 
-    // soften everything else
     map.setPaintProperty("resources-core", "circle-opacity",
       ["case",
-        ["in", ["get", "type"], ["literal", Array.from(need)]], 0.92,
-        0.22
+        ["in", ["get", "type"], ["literal", Array.from(need)]], 0.95,
+        0.25
       ]
     );
     map.setPaintProperty("resources-glow", "circle-opacity",
       ["case",
         ["in", ["get", "type"], ["literal", Array.from(need)]],
-        ["interpolate", ["linear"], ["get", "strength"], 0.5, 0.10, 1.0, 0.22],
-        0.04
+        ["interpolate", ["linear"], ["get", "strength"], 0.35, 0.04, 1.0, 0.12],
+        0.02
       ]
     );
   }
 
   async function loadFactories() {
-    const r = await fetch("/api/factories", { credentials:"include" });
+    const r = await fetch("/api/factories", { credentials: "include" });
     const j = await r.json().catch(() => ({}));
-    factoriesFC = (j.ok && j.data) ? j.data : { type:"FeatureCollection", features:[] };
+    factoriesFC = j.ok && j.data ? j.data : { type: "FeatureCollection", features: [] };
     drawFactoryMarkers();
   }
 
@@ -1251,8 +1280,7 @@
     for (const m of factoryMarkers) m.marker.remove();
     factoryMarkers.length = 0;
 
-    // factories are fewer usually, OK to keep DOM markers
-    for (const f of (factoriesFC.features || [])) {
+    for (const f of factoriesFC.features || []) {
       const [lng, lat] = f.geometry.coordinates;
       const p = f.properties || {};
       const el = factoryIconEl(p.icon, p.name, p.level);
@@ -1262,25 +1290,6 @@
         .addTo(map);
 
       factoryMarkers.push({ marker, el });
-    }
-    updateMarkerDetail();
-    updateBacksideFactoriesVisibility();
-  }
-
-  function updateBacksideFactoriesVisibility() {
-    const z = map.getZoom();
-    const shouldCull = z >= 2.2;
-    const center = map.getCenter();
-    const clng = center.lng, clat = center.lat;
-
-    for (const fm of factoryMarkers) {
-      const ll = fm.marker.getLngLat();
-      let visible = true;
-      if (shouldCull) {
-        const ang = angularDistanceRad(clng, clat, ll.lng, ll.lat);
-        visible = ang <= (Math.PI / 2);
-      }
-      fm.el.style.display = visible ? "" : "none";
     }
   }
 
@@ -1292,7 +1301,7 @@
       return;
     }
 
-    const r = await fetch("/api/my/factories", { credentials:"include" });
+    const r = await fetch("/api/my/factories", { credentials: "include" });
     const j = await r.json().catch(() => ({}));
     if (!j.ok) {
       fbMyFactories.innerHTML = `<div class="fb-muted">Failed to load.</div>`;
@@ -1371,7 +1380,7 @@
   function myCountryIdFromCountriesFC() {
     if (!ME.authenticated) return null;
     const feats = countriesFC.features || [];
-    const mine = feats.find(f => (f.properties && (f.properties.owner === ME.username)));
+    const mine = feats.find((f) => f.properties && f.properties.owner === ME.username);
     return mine ? Number(mine.properties.id) : null;
   }
 
@@ -1397,21 +1406,6 @@
       await refreshMyFactories();
     } catch (e) {
       showFbMsg(e.message);
-    }
-  }
-
-  // ---- marker detail LOD ----
-  function updateMarkerDetail() {
-    const z = map.getZoom();
-    for (const rm of resourceMarkers) {
-      // clean levels
-      if (z < 3.9) rm.el.classList.add("tiny");
-      else rm.el.classList.remove("tiny");
-    }
-    for (const fm of factoryMarkers) {
-      if (z < 2.2) { fm.el.classList.add("tiny"); fm.el.classList.remove("small"); }
-      else if (z < 3.2) { fm.el.classList.add("small"); fm.el.classList.remove("tiny"); }
-      else { fm.el.classList.remove("small"); fm.el.classList.remove("tiny"); }
     }
   }
 
@@ -1450,16 +1444,12 @@
 
     map.resize();
     updateStarsVisibility(map);
-    updateMarkerDetail();
-    updateBacksideResourcesVisibility();
-    updateBacksideFactoriesVisibility();
     updateDraftEconomyUI(true);
 
-    // Tooltip interactions for resources (fast)
     const setHoverFeature = (feat) => {
       const src = map.getSource("resourcesHover");
       if (!src) return;
-      src.setData(feat ? { type:"FeatureCollection", features:[feat] } : { type:"FeatureCollection", features:[] });
+      src.setData(feat ? { type: "FeatureCollection", features: [feat] } : { type: "FeatureCollection", features: [] });
     };
 
     map.on("mousemove", "resources-core", (e) => {
@@ -1473,7 +1463,7 @@
       const nm = p.name || t;
       const st = Math.round((Number(p.strength) || 0) * 100);
 
-      const icon = (RESOURCE_META[t]?.icon) || "✨";
+      const icon = RESOURCE_META[t]?.icon || "✨";
       tipShow(e.originalEvent.clientX, e.originalEvent.clientY, `
         <div style="display:flex; gap:10px; align-items:flex-start;">
           <div style="font-size:18px; line-height:1;">${icon}</div>
@@ -1491,35 +1481,34 @@
     });
   });
 
-  // ---- HUD updates (throttled) ----
+  // ---- HUD updates ----
   function fmt(n) { return (Math.round(n * 1000) / 1000).toFixed(3); }
 
-  const updateHUD = rafThrottle((e) => {
+  const updateMouseHUD = rafThrottle((e) => {
     if (coordsEl && e && e.lngLat) coordsEl.textContent = `${fmt(e.lngLat.lng)}, ${fmt(e.lngLat.lat)}`;
-    if (zoomEl) zoomEl.textContent = `Zoom ${map.getZoom().toFixed(2)}`;
-
-    updateStarsVisibility(map);
-    updateMarkerDetail();
-    if (RESOURCE_MARKERS_ENABLED) updateBacksideResourcesVisibility();
-    updateBacksideFactoriesVisibility();
-
-    if (mode === "create_country" && e && e.lngLat) setDraftPreview(e.lngLat.lng, e.lngLat.lat);
-    else setDraftPreview(0, 0);
+    if (mode === "create_country" || mode === "expand_country") {
+      if (e && e.lngLat) setDraftPreview(e.lngLat.lng, e.lngLat.lat);
+    }
   });
 
-  map.on("mousemove", updateHUD);
-  map.on("move", updateHUD);
-  map.on("zoom", updateHUD);
+  const updateMoveHUD = rafThrottle(() => {
+    if (zoomEl) zoomEl.textContent = `Zoom ${map.getZoom().toFixed(2)}`;
+    updateStarsVisibility(map);
+    if (RESOURCE_MARKERS_ENABLED) rebuildResourceMarkersCapped();
+  });
+
+  map.on("mousemove", updateMouseHUD);
+  map.on("move", updateMoveHUD);
+  map.on("zoom", updateMoveHUD);
 
   map.scrollZoom.enable();
   map.dragRotate.enable();
   map.dragPan.enable();
   map.touchZoomRotate.enable();
 
-  // ---- resources refresh (debounced + moveend only) ----
   const scheduleResourcesReload = debounce(() => {
-    loadResourcesLOD().catch(()=>{});
-  }, 200);
+    loadResourcesLOD().catch(() => {});
+  }, 180);
 
   map.on("moveend", scheduleResourcesReload);
   map.on("zoomend", scheduleResourcesReload);
@@ -1530,12 +1519,14 @@
       return buildFactoryAt(e.lngLat.lng, e.lngLat.lat);
     }
 
-    if (mode !== "create_country") return;
+    if (mode !== "create_country" && mode !== "expand_country") return;
 
-    const feats = map.queryRenderedFeatures(e.point, { layers: ["countries-fill"] });
-    if (feats && feats.length) {
-      showFbMsg("⛔ Тут уже є країна. Не можна ставити країну на країну.");
-      return;
+    if (mode === "create_country") {
+      const feats = map.queryRenderedFeatures(e.point, { layers: ["countries-fill"] });
+      if (feats && feats.length) {
+        showFbMsg("⛔ Тут уже є країна. Не можна ставити країну на країну.");
+        return;
+      }
     }
 
     const onLand = isPointOnLand(e.lngLat.lng, e.lngLat.lat);
@@ -1551,7 +1542,31 @@
   });
 
   // ---- UI handlers (country) ----
-  if (btnCreateCountry) btnCreateCountry.addEventListener("click", () => setMode("create_country"));
+  if (btnCreateCountry) btnCreateCountry.addEventListener("click", () => {
+    EXPAND_TARGET = { countryId: null, oldAreaKm2: 0, oldCost: 0 };
+    setMode("create_country");
+  });
+
+  if (btnExpandCountry) btnExpandCountry.addEventListener("click", async () => {
+    hideFbMsg();
+    if (!ME.authenticated) return showFbMsg("Login first.");
+    if (!ME.has_country) return showFbMsg("Create your country first.");
+
+    const r = await fetch("/api/my/country", { credentials: "include" });
+    const j = await r.json().catch(() => ({}));
+    const feat = j?.data;
+    if (!j.ok || !feat) return showFbMsg("Не можу знайти твою країну. Перезавантаж сторінку.");
+
+    const cid = Number(feat.properties?.id || feat.id || 0);
+    const oldArea = Number(feat.properties?.area_km2 || 0);
+    const oldCost = computeCountryCost(oldArea);
+
+    EXPAND_TARGET = { countryId: cid, oldAreaKm2: oldArea, oldCost };
+
+    clearDraft();
+    setMode("expand_country");
+    showFbMsg("🟣 Розширення: намалюй НОВИЙ полігон країни (більший). Вартість покаже Δ (різницю).");
+  });
 
   if (btnUndo) btnUndo.addEventListener("click", () => {
     if (draftPoints.length) {
@@ -1568,7 +1583,7 @@
   });
 
   if (btnCloseCountry) btnCloseCountry.addEventListener("click", closeCountrySaveModal);
-  if (btnSaveCountry) btnSaveCountry.addEventListener("click", saveCountry);
+  if (btnSaveCountry) btnSaveCountry.addEventListener("click", saveCountryOrExpand);
 
   // ---- UI handlers (factory sidebar) ----
   if (fbToggle && factorybar) {
@@ -1624,7 +1639,7 @@
 
   if (btnTipFactory && fbTip) {
     btnTipFactory.addEventListener("click", () => {
-      fbTip.style.display = (fbTip.style.display === "none" || !fbTip.style.display) ? "block" : "none";
+      fbTip.style.display = fbTip.style.display === "none" || !fbTip.style.display ? "block" : "none";
     });
   }
 
@@ -1711,7 +1726,7 @@
       if (!currentCountryPanelId) return;
 
       const feat = (countriesFC?.features || []).find(
-        f => Number(f.properties?.id) === Number(currentCountryPanelId)
+        (f) => Number(f.properties?.id) === Number(currentCountryPanelId)
       );
       if (!feat) return;
 
@@ -1740,6 +1755,4 @@
   // ---------- INIT ----------
   setFactoriesPanel(false);
   setMode("explore");
-  s
-
 })();
