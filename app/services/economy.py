@@ -4,7 +4,7 @@ import math
 from datetime import datetime
 from ..extensions import db
 from ..models import Country, Factory
-from .geo import haversine_km, point_in_polygon
+from .geo import haversine_km  # ✅ only this now
 
 START_COINS = int(os.getenv("START_COINS", "5000"))
 
@@ -34,24 +34,75 @@ FACTORY_BLUEPRINTS = {
 def compute_country_cost(area_km2: float) -> int:
     return int(round(COUNTRY_BASE_COST + (area_km2 / 1000.0) * COUNTRY_COST_PER_1000_KM2))
 
-def country_polygon_ring(country: Country):
+
+# ----------------------------
+# ✅ Local point-in-polygon (ring) for economy usage
+# ----------------------------
+def point_in_ring(lng: float, lat: float, ring) -> bool:
+    """
+    Ray casting. ring must be closed.
+    """
+    if not ring or len(ring) < 4:
+        return False
+    inside = False
+    n = len(ring) - 1
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i][0], ring[i][1]
+        xj, yj = ring[j][0], ring[j][1]
+        intersect = ((yi > lat) != (yj > lat)) and (lng < (xj - xi) * (lat - yi) / ((yj - yi) or 1e-12) + xi)
+        if intersect:
+            inside = not inside
+        j = i
+    return inside
+
+
+def country_outer_rings(country: Country):
+    """
+    ✅ Supports Polygon + MultiPolygon (after union attach)
+    Returns list of outer rings.
+    """
     try:
         geom = json.loads(country.geom_json)
-        return geom["coordinates"][0]
     except Exception:
-        return None
+        return []
+
+    t = geom.get("type")
+    coords = geom.get("coordinates")
+
+    rings = []
+    if t == "Polygon" and isinstance(coords, list) and coords and isinstance(coords[0], list):
+        rings.append(coords[0])
+    elif t == "MultiPolygon" and isinstance(coords, list):
+        for poly in coords:
+            if isinstance(poly, list) and poly and isinstance(poly[0], list):
+                rings.append(poly[0])
+
+    # filter closed-ish rings
+    rings = [r for r in rings if isinstance(r, list) and len(r) >= 4]
+    return rings
+
+
+def point_in_country(country: Country, lng: float, lat: float) -> bool:
+    """
+    ✅ Works for Polygon/MultiPolygon by checking all outer rings.
+    (holes ignored; ok for this game logic)
+    """
+    for ring in country_outer_rings(country):
+        if point_in_ring(lng, lat, ring):
+            return True
+    return False
+
 
 def resources_near_point_in_country(resource_nodes, country: Country, lng: float, lat: float):
-    ring = country_polygon_ring(country)
-    if not ring:
-        return []
     near = []
     for n in resource_nodes:
-        if not point_in_polygon(n["lng"], n["lat"], ring):
+        if not point_in_country(country, float(n["lng"]), float(n["lat"])):
             continue
         if haversine_km(lng, lat, n["lng"], n["lat"]) <= FACTORY_PICK_RADIUS_KM:
             near.append(n)
     return near
+
 
 def calc_factory_rate_per_hour(resource_nodes, factory: Factory) -> float:
     bp = FACTORY_BLUEPRINTS.get(factory.blueprint)
@@ -82,6 +133,7 @@ def calc_factory_rate_per_hour(resource_nodes, factory: Factory) -> float:
     lvl_mult = 1.0 + (max(0, level - 1) * 0.22)
     return base * mult * lvl_mult
 
+
 def accrue_factory(resource_nodes, factory: Factory, now: datetime):
     last = factory.last_collected_at or now
     dt_hours = (now - last).total_seconds() / 3600.0
@@ -95,3 +147,22 @@ def accrue_factory(resource_nodes, factory: Factory, now: datetime):
     if gain > 0:
         factory.stored_coins = int(factory.stored_coins or 0) + gain
     factory.last_collected_at = now
+def country_polygon_ring(country: Country):
+    """
+    Backward-compatible for old code (api_factories.py etc).
+    Returns ONE outer ring.
+    If geometry is MultiPolygon -> returns the biggest outer ring (roughly).
+    """
+    rings = country_outer_rings(country)
+    if not rings:
+        return None
+    if len(rings) == 1:
+        return rings[0]
+
+    # choose biggest ring by bbox area (fast heuristic)
+    def bbox_area(r):
+        xs = [p[0] for p in r[:-1]]
+        ys = [p[1] for p in r[:-1]]
+        return (max(xs) - min(xs)) * (max(ys) - min(ys))
+
+    return max(rings, key=bbox_area)

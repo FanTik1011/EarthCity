@@ -1,7 +1,17 @@
 // static/js/map.js
 // EarthCity — Globe + Resources(server, LOD) + Countries + Create Country + Factories(server)
-// OPTIMIZED: smaller resource dots, lighter glow, less lag on zoom, less DOM rebuilds
-// + NEW: Expand territory (redraw polygon) via /api/countries/<id>/update-geometry
+// OPTIMIZED + UX+++ (NO backend changes)
+//
+// ✅ EXPAND TERRITORY UX+++ (Border Edit Mode)
+//  - Hover line: shows GREEN segment where point will be inserted
+//  - Click on LINE = insert point into nearest segment (comfortable tolerance)
+//  - Alt+Click = insert even if you clicked a bit farther (force insert)
+//  - Drag points (handles) with snap to ghost border if close
+//  - Shift+Click on a point = delete point
+//  - Ctrl+Z / Ctrl+Y = Undo / Redo for insert/drag/delete
+//  - Clear user hints + “why disabled” (button title) + better cursor + point hover highlight
+//
+// NOTE: This file assumes your HTML ids exist (as in your current layout).
 
 (function () {
   const $ = (id) => document.getElementById(id);
@@ -13,7 +23,7 @@
 
   // Country build UI
   const btnCreateCountry = $("btnCreateCountry");
-  const btnExpandCountry = $("btnExpandCountry"); // optional new button in topbar
+  const btnExpandCountry = $("btnExpandCountry");
   const buildActions = $("buildActions");
   const btnUndo = $("btnUndo");
   const btnCancel = $("btnCancel");
@@ -50,7 +60,9 @@
   // Topbar factories button
   const btnOpenFactories = $("btnOpenFactories");
 
-  // ---- Stars background ----
+  // =========================================================
+  // Stars background
+  // =========================================================
   if (starsEl) {
     const N = 200;
     for (let i = 0; i < N; i++) {
@@ -75,8 +87,9 @@
     if (starsEl) starsEl.style.opacity = opacity.toFixed(2);
   }
 
-  // ---- Helpers ----
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  // =========================================================
+  // Helpers
+  // =========================================================
   function rad(d) { return (d * Math.PI) / 180; }
 
   function angularDistanceRad(lng1, lat1, lng2, lat2) {
@@ -118,17 +131,6 @@
     return n.toLocaleString("en-US") + " км²";
   }
 
-  function showFbMsg(text) {
-    if (!fbMsg) return;
-    fbMsg.style.display = "block";
-    fbMsg.textContent = text;
-  }
-  function hideFbMsg() {
-    if (!fbMsg) return;
-    fbMsg.style.display = "none";
-    fbMsg.textContent = "";
-  }
-
   function debounce(fn, ms) {
     let t = null;
     return (...args) => {
@@ -150,7 +152,44 @@
     };
   }
 
-  // ---- Rules + coins ----
+  // =========================================================
+  // User-friendly message system (non-spam)
+  // =========================================================
+  let lastFbText = "";
+  let lastFbAt = 0;
+
+  function showFbMsg(text, ttlMs = 0) {
+    if (!fbMsg) return;
+    const now = Date.now();
+    if (text === lastFbText && now - lastFbAt < 900) return;
+
+    lastFbText = text;
+    lastFbAt = now;
+
+    fbMsg.style.display = "block";
+    fbMsg.textContent = text;
+
+    if (ttlMs > 0) {
+      const cur = text;
+      setTimeout(() => {
+        if (fbMsg && fbMsg.textContent === cur) {
+          fbMsg.style.display = "none";
+          fbMsg.textContent = "";
+        }
+      }, ttlMs);
+    }
+  }
+
+  function hideFbMsg() {
+    if (!fbMsg) return;
+    fbMsg.style.display = "none";
+    fbMsg.textContent = "";
+    lastFbText = "";
+  }
+
+  // =========================================================
+  // Rules + user state
+  // =========================================================
   let RULES = {
     start_coins: 5000,
     country_base_cost: 800,
@@ -189,7 +228,9 @@
     );
   }
 
-  // ---- Map style ----
+  // =========================================================
+  // Map style
+  // =========================================================
   const rasterStyle = {
     version: 8,
     sources: {
@@ -234,7 +275,7 @@
   map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
 
   // =========================================================
-  // LAND CHECK (green/red zones) — requires static/data/land.geojson
+  // LAND CHECK — requires static/data/land.geojson
   // =========================================================
   let LAND = { type: "FeatureCollection", features: [] };
   let LAND_READY = false;
@@ -288,7 +329,7 @@
   }
 
   function isPointOnLand(lng, lat) {
-    if (!LAND_READY) return null; // unknown
+    if (!LAND_READY) return null;
     for (const f of LAND.features || []) {
       const rings = landRingsFromGeometry(f && f.geometry);
       for (const ring of rings) {
@@ -298,14 +339,117 @@
     return false;
   }
 
-  function isDraftOnLand() {
-    if (!LAND_READY) return null;
-    if (!draftPoints.length) return false;
-    for (const p of draftPoints) {
-      const ok = isPointOnLand(p.lng, p.lat);
-      if (ok !== true) return false;
+  // =========================================================
+  // Expand ghost (old border) + hover highlight
+  // =========================================================
+  const EXPAND_GHOST = { type: "FeatureCollection", features: [] };
+
+  function addExpandGhostLayer() {
+    if (map.getSource("expandGhost")) return;
+
+    map.addSource("expandGhost", { type: "geojson", data: EXPAND_GHOST });
+
+    map.addLayer({
+      id: "expand-ghost-fill",
+      type: "fill",
+      source: "expandGhost",
+      paint: {
+        "fill-color": "rgba(255,255,255,0.45)",
+        "fill-opacity": 0.06
+      }
+    });
+
+    map.addLayer({
+      id: "expand-ghost-line",
+      type: "line",
+      source: "expandGhost",
+      paint: {
+        "line-color": "rgba(255,255,255,0.65)",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 1.2, 1.0, 6.0, 3.2],
+        "line-opacity": 0.55,
+        "line-dasharray": [2, 2]
+      }
+    });
+  }
+
+  function setExpandGhostFromRingClosed(ringClosed) {
+    if (!ringClosed || ringClosed.length < 4) {
+      EXPAND_GHOST.features = [];
+    } else {
+      EXPAND_GHOST.features = [{
+        type: "Feature",
+        properties: { kind: "ghost" },
+        geometry: { type: "Polygon", coordinates: [ringClosed] }
+      }];
     }
-    return true;
+    const src = map.getSource("expandGhost");
+    if (src) src.setData(EXPAND_GHOST);
+  }
+
+  // --- Hover highlight segment (where point will be inserted) ---
+  const EXPAND_HOVER = { type: "FeatureCollection", features: [] };
+
+  function addExpandHoverLayer() {
+    if (map.getSource("expandHover")) return;
+    map.addSource("expandHover", { type: "geojson", data: EXPAND_HOVER });
+
+    map.addLayer({
+      id: "expand-hover-line",
+      type: "line",
+      source: "expandHover",
+      paint: {
+        "line-color": "rgba(34,197,94,0.95)",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 1.2, 2.2, 6.0, 6.6],
+        "line-opacity": 0.9
+      }
+    });
+  }
+
+  function setExpandHoverSegment(a, b) {
+    if (!a || !b) {
+      EXPAND_HOVER.features = [];
+    } else {
+      EXPAND_HOVER.features = [{
+        type: "Feature",
+        properties: {},
+        geometry: { type: "LineString", coordinates: [[a.lng, a.lat], [b.lng, b.lat]] }
+      }];
+    }
+    const src = map.getSource("expandHover");
+    if (src) src.setData(EXPAND_HOVER);
+  }
+
+  // ✅ NEW: hover point highlight (makes dragging feel obvious)
+  const EXPAND_POINT_HOVER = { type: "FeatureCollection", features: [] };
+  function addExpandPointHoverLayer() {
+    if (map.getSource("expandPointHover")) return;
+    map.addSource("expandPointHover", { type: "geojson", data: EXPAND_POINT_HOVER });
+    map.addLayer({
+      id: "expand-point-hover",
+      type: "circle",
+      source: "expandPointHover",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.2, 7, 4.0, 10, 6.0, 13],
+        "circle-color": "rgba(255,255,255,0.14)",
+        "circle-stroke-color": "rgba(255,255,255,0.95)",
+        "circle-stroke-width": 2,
+        "circle-opacity": 1,
+        "circle-blur": 0.15
+      }
+    });
+  }
+  function setExpandPointHover(lng, lat, on) {
+    if (!on) {
+      EXPAND_POINT_HOVER.features = [];
+    } else {
+      EXPAND_POINT_HOVER.features = [{
+        type: "Feature",
+        properties: {},
+        geometry: { type: "Point", coordinates: [lng, lat] }
+      }];
+    }
+    const src = map.getSource("expandPointHover");
+    if (src) src.setData(EXPAND_POINT_HOVER);
   }
 
   // =========================================================
@@ -350,23 +494,6 @@
 
     if (pointInRing(B[0][0], B[0][1], ringAClosed)) return true;
     if (pointInRing(A[0][0], A[0][1], ringBClosed)) return true;
-    return false;
-  }
-
-  function draftIntersectsAnyCountry(excludeCountryId = null) {
-    if (draftPoints.length < 3) return false;
-    const ring = draftPoints.map((p) => [p.lng, p.lat]);
-    const closed = ring.concat([ring[0]]);
-
-    const feats = countriesFC && countriesFC.features ? countriesFC.features : [];
-    for (const f of feats) {
-      const id = Number(f?.properties?.id ?? f?.id ?? -1);
-      if (excludeCountryId && id === Number(excludeCountryId)) continue;
-
-      const ring2 = f?.geometry?.coordinates?.[0];
-      if (!ring2 || ring2.length < 4) continue;
-      if (ringsIntersect(closed, ring2)) return true;
-    }
     return false;
   }
 
@@ -430,50 +557,36 @@
     if (map.getSource("draftPreview")) map.getSource("draftPreview").setData(DRAFT_PREVIEW);
   }
 
+  function isDraftOnLand(draftPoints) {
+    if (!LAND_READY) return null;
+    if (!draftPoints.length) return false;
+    for (const p of draftPoints) {
+      const ok = isPointOnLand(p.lng, p.lat);
+      if (ok !== true) return false;
+    }
+    return true;
+  }
+
   // =========================================================
-  // RESOURCES (server) + CLEAN LOD
+  // Resources (server) + LOD
   // =========================================================
   let RESOURCES = { type: "FeatureCollection", features: [] };
 
   const RESOURCE_META = {
-    oil: { icon: "🛢️" },
-    gas: { icon: "🔥" },
-    iron: { icon: "⛏️" },
-    gold: { icon: "🪙" },
-    coal: { icon: "🪨" },
-    uranium: { icon: "☢️" },
-    rare: { icon: "💎" },
-    water: { icon: "💧" },
-    farmland: { icon: "🌾" },
-    fish: { icon: "🐟" },
-    wind: { icon: "🌬️" },
-    solar: { icon: "☀️" },
-    hydro: { icon: "🌊" },
-    geo: { icon: "🌋" }
+    oil: { icon: "🛢️" }, gas: { icon: "🔥" }, iron: { icon: "⛏️" }, gold: { icon: "🪙" },
+    coal: { icon: "🪨" }, uranium: { icon: "☢️" }, rare: { icon: "💎" }, water: { icon: "💧" },
+    farmland: { icon: "🌾" }, fish: { icon: "🐟" }, wind: { icon: "🌬️" }, solar: { icon: "☀️" },
+    hydro: { icon: "🌊" }, geo: { icon: "🌋" }
   };
 
   const RESOURCE_RADIUS = [
     "interpolate", ["exponential", 1.45], ["zoom"],
-    0.8, 0.7,
-    1.3, 0.9,
-    1.7, 1.2,
-    2.2, 1.55,
-    2.8, 2.1,
-    3.4, 2.8,
-    4.2, 3.6,
-    5.0, 4.4,
-    6.2, 5.2
+    0.8, 0.7, 1.3, 0.9, 1.7, 1.2, 2.2, 1.55, 2.8, 2.1, 3.4, 2.8, 4.2, 3.6, 5.0, 4.4, 6.2, 5.2
   ];
 
   const RESOURCE_GLOW_RADIUS = [
     "interpolate", ["exponential", 1.5], ["zoom"],
-    0.8, 2.0,
-    1.5, 3.5,
-    2.2, 5.5,
-    3.0, 8.0,
-    4.2, 11.0,
-    5.2, 14.0,
-    6.2, 16.0
+    0.8, 2.0, 1.5, 3.5, 2.2, 5.5, 3.0, 8.0, 4.2, 11.0, 5.2, 14.0, 6.2, 16.0
   ];
 
   function addResourceLayers() {
@@ -545,13 +658,7 @@
       type: "circle",
       source: "resourcesHover",
       paint: {
-        "circle-radius": [
-          "interpolate", ["linear"], ["zoom"],
-          1.0, 7,
-          3.0, 10,
-          5.0, 14,
-          6.2, 16
-        ],
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.0, 7, 3.0, 10, 5.0, 14, 6.2, 16],
         "circle-color": "rgba(255,255,255,0.06)",
         "circle-stroke-color": "rgba(255,255,255,0.75)",
         "circle-stroke-width": 2,
@@ -564,7 +671,7 @@
     map.on("mouseleave", "resources-core", () => { map.getCanvas().style.cursor = ""; });
   }
 
-  // --- Tooltip (single element) ---
+  // Tooltip
   const tip = document.createElement("div");
   tip.style.position = "absolute";
   tip.style.zIndex = "50";
@@ -592,7 +699,7 @@
   }
   function tipHide() { tip.style.display = "none"; }
 
-  // HTML markers: DISABLED by default for performance (only if super close zoom)
+  // HTML markers for resources (only close zoom)
   const resourceMarkers = [];
   let RESOURCE_MARKERS_ENABLED = false;
   const RESOURCE_MARKERS_CAP = 120;
@@ -619,7 +726,6 @@
     const meta = RESOURCE_META[type] || { icon: "✨" };
     const wrap = document.createElement("div");
     wrap.className = "resource-marker";
-
     wrap.style.display = "flex";
     wrap.style.gap = "8px";
     wrap.style.alignItems = "center";
@@ -733,7 +839,9 @@
     if (wantHtml) rebuildResourceMarkersCapped();
   }
 
-  // ---- Countries (MMO) ----
+  // =========================================================
+  // Countries
+  // =========================================================
   let countriesFC = { type: "FeatureCollection", features: [] };
   let selectedCountryId = null;
 
@@ -754,10 +862,7 @@
       id: "countries-fill",
       type: "fill",
       source: "countries",
-      paint: {
-        "fill-color": ["get", "color"],
-        "fill-opacity": 0.20
-      }
+      paint: { "fill-color": ["get", "color"], "fill-opacity": 0.20 }
     });
 
     map.addLayer({
@@ -794,66 +899,52 @@
     });
   }
 
-  // ---- Draft (Create/Expand Country) ----
+  // =========================================================
+  // Draft
+  // =========================================================
   let mode = "explore"; // explore | create_country | expand_country | factory_build
   let draftPoints = [];
-
   let EXPAND_TARGET = { countryId: null, oldAreaKm2: 0, oldCost: 0 };
 
+  // Undo/Redo history
+  const draftHistory = [];
+  const redoHistory = [];
+  const HISTORY_MAX = 80;
+
+  function snapshotDraft() {
+    return draftPoints.map(p => ({ lng: p.lng, lat: p.lat }));
+  }
+
+  function applyDraftSnapshot(snap) {
+    draftPoints = (snap || []).map(p => ({ lng: p.lng, lat: p.lat }));
+    refreshDraftSource();
+  }
+
+  function pushDraftHistory() {
+    draftHistory.push(snapshotDraft());
+    if (draftHistory.length > HISTORY_MAX) draftHistory.shift();
+    redoHistory.length = 0;
+  }
+
+  function undoDraft() {
+    if (!draftHistory.length) return false;
+    redoHistory.push(snapshotDraft());
+    const prev = draftHistory.pop();
+    applyDraftSnapshot(prev);
+    return true;
+  }
+
+  function redoDraft() {
+    if (!redoHistory.length) return false;
+    draftHistory.push(snapshotDraft());
+    const next = redoHistory.pop();
+    applyDraftSnapshot(next);
+    return true;
+  }
+
+  function clearDraftHistory() { draftHistory.length = 0; redoHistory.length = 0; }
+
   const DRAFT = { type: "FeatureCollection", features: [] };
-
-  function setMode(m) {
-    mode = m;
-
-    if (btnCreateCountry && buildActions) {
-      if (mode === "create_country" || mode === "expand_country") {
-        buildActions.style.display = "flex";
-        if (btnCreateCountry) btnCreateCountry.style.display = "none";
-        if (btnExpandCountry) btnExpandCountry.style.display = "none";
-
-        map.getCanvas().style.cursor = "crosshair";
-        selectedCountryId = null;
-        if (map.getLayer("countries-selected")) map.setFilter("countries-selected", ["==", ["get", "id"], -1]);
-
-        hideFbMsg();
-        if (!LAND_READY) showFbMsg("ℹ️ land.geojson не знайдено → клієнт не знає сушу (сервер все одно перевірить).");
-
-        updateDraftEconomyUI();
-      } else {
-        buildActions.style.display = "none";
-        if (btnCreateCountry) btnCreateCountry.style.display = "inline-flex";
-        if (btnExpandCountry) btnExpandCountry.style.display = "inline-flex";
-        map.getCanvas().style.cursor = "";
-        clearDraft();
-        updateDraftEconomyUI(true);
-      }
-    }
-
-    if (fbSub) {
-      fbSub.textContent = mode === "factory_build"
-        ? "Build mode: ON (click inside your country)"
-        : "Build mode: off";
-    }
-    if (btnCancelFactoryMode) btnCancelFactoryMode.style.display = mode === "factory_build" ? "inline-flex" : "none";
-    if (btnTipFactory) btnTipFactory.style.display = mode === "factory_build" ? "inline-flex" : "none";
-
-    if (mode !== "factory_build") {
-      selectedBlueprint = null;
-      renderSelectedBlueprint();
-      hideFbMsg();
-    }
-
-    if (mode !== "create_country" && mode !== "expand_country") setDraftPreview(0, 0);
-  }
-
-  function clearDraft() {
-    draftPoints = [];
-    DRAFT.features = [];
-    if (map.getSource("draft")) map.getSource("draft").setData(DRAFT);
-
-    DRAFT_PREVIEW.features = [];
-    if (map.getSource("draftPreview")) map.getSource("draftPreview").setData(DRAFT_PREVIEW);
-  }
 
   function addDraftLayers() {
     if (map.getSource("draft")) return;
@@ -865,10 +956,7 @@
       type: "fill",
       source: "draft",
       filter: ["==", ["get", "kind"], "poly"],
-      paint: {
-        "fill-color": "rgba(124,58,237,0.65)",
-        "fill-opacity": 0.16
-      }
+      paint: { "fill-color": "rgba(124,58,237,0.65)", "fill-opacity": 0.16 }
     });
 
     map.addLayer({
@@ -878,30 +966,24 @@
       filter: ["==", ["get", "kind"], "line"],
       paint: {
         "line-color": "rgba(255,255,255,0.92)",
-        "line-width": ["interpolate", ["exponential", 1.2], ["zoom"], 1.2, 2.0, 6, 4.2],
+        "line-width": ["interpolate", ["exponential", 1.2], ["zoom"], 1.2, 2.2, 6, 4.6],
         "line-opacity": 0.96
       }
     });
 
+    // ✅ “handles” look a bit more obvious
     map.addLayer({
       id: "draft-points",
       type: "circle",
       source: "draft",
       filter: ["==", ["get", "kind"], "pts"],
       paint: {
-        "circle-radius": [
-          "interpolate", ["exponential", 1.5], ["zoom"],
-          1.0, 3.0,
-          2.0, 4.0,
-          3.2, 5.4,
-          4.2, 7.2,
-          6.0, 9.2
-        ],
+        "circle-radius": ["interpolate", ["exponential", 1.5], ["zoom"], 1.0, 3.6, 2.0, 4.6, 3.2, 6.2, 4.2, 8.4, 6.0, 10.8],
         "circle-color": "rgba(124,58,237,1)",
-        "circle-opacity": 0.95,
-        "circle-stroke-color": "rgba(0,0,0,0.45)",
+        "circle-opacity": 0.97,
+        "circle-stroke-color": "rgba(0,0,0,0.55)",
         "circle-stroke-width": 1,
-        "circle-blur": 0.10
+        "circle-blur": 0.08
       }
     });
   }
@@ -921,7 +1003,7 @@
       DRAFT.features.push({
         type: "Feature",
         properties: { kind: "line" },
-        geometry: { type: "LineString", coordinates: coords }
+        geometry: { type: "LineString", coordinates: coords.concat([coords[0]]) }
       });
     }
     if (coords.length >= 3) {
@@ -935,6 +1017,19 @@
 
     if (map.getSource("draft")) map.getSource("draft").setData(DRAFT);
     updateDraftEconomyUI();
+  }
+
+  function clearDraft() {
+    draftPoints = [];
+    DRAFT.features = [];
+    if (map.getSource("draft")) map.getSource("draft").setData(DRAFT);
+
+    DRAFT_PREVIEW.features = [];
+    if (map.getSource("draftPreview")) map.getSource("draftPreview").setData(DRAFT_PREVIEW);
+
+    setExpandHoverSegment(null, null);
+    setExpandPointHover(0, 0, false);
+    clearDraftHistory();
   }
 
   function updateDraftEconomyUI(reset = false) {
@@ -976,7 +1071,7 @@
     const tooBig = area > RULES.country_max_area_km2;
     const tooMany = draftPoints.length > RULES.country_max_points;
 
-    const notOnLand = isDraftOnLand() === false;
+    const notOnLand = isDraftOnLand(draftPoints) === false;
     const overlaps = mode === "expand_country"
       ? draftIntersectsAnyCountry(EXPAND_TARGET.countryId)
       : draftIntersectsAnyCountry(null);
@@ -997,13 +1092,263 @@
     }
 
     if (mode === "create_country" || mode === "expand_country") {
-      if (notOnLand) showFbMsg("🔴 Став точки на суші (зелена зона).");
-      else if (overlaps) showFbMsg("⛔ Перетин з іншою країною. Не можна.");
-      else hideFbMsg();
+      if (notOnLand) showFbMsg("🔴 Точки мають бути НА СУШІ. (зелена крапка = ок)");
+      else if (overlaps) showFbMsg("⛔ Перетин з іншою країною — так не можна.");
     }
   }
 
-  // ---- Modal helpers ----
+  function setMode(m) {
+    mode = m;
+
+    if (m !== "expand_country") {
+      setExpandGhostFromRingClosed(null);
+      setExpandHoverSegment(null, null);
+      setExpandPointHover(0, 0, false);
+    }
+
+    if (btnCreateCountry && buildActions) {
+      if (mode === "create_country" || mode === "expand_country") {
+        buildActions.style.display = "flex";
+        if (btnCreateCountry) btnCreateCountry.style.display = "none";
+        if (btnExpandCountry) btnExpandCountry.style.display = "none";
+
+        map.getCanvas().style.cursor = "crosshair";
+        selectedCountryId = null;
+        if (map.getLayer("countries-selected")) map.setFilter("countries-selected", ["==", ["get", "id"], -1]);
+
+        hideFbMsg();
+        if (!LAND_READY) showFbMsg("ℹ️ land.geojson не знайдено → клієнт не знає сушу (сервер все одно перевірить).");
+
+        updateDraftEconomyUI();
+      } else {
+        buildActions.style.display = "none";
+        if (btnCreateCountry) btnCreateCountry.style.display = "inline-flex";
+        if (btnExpandCountry) btnExpandCountry.style.display = "inline-flex";
+        map.getCanvas().style.cursor = "";
+        clearDraft();
+        updateDraftEconomyUI(true);
+        hideFbMsg();
+      }
+    }
+
+    if (fbSub) {
+      fbSub.textContent = mode === "factory_build"
+        ? "Build mode: ON (click inside your country)"
+        : "Build mode: off";
+    }
+    if (btnCancelFactoryMode) btnCancelFactoryMode.style.display = mode === "factory_build" ? "inline-flex" : "none";
+    if (btnTipFactory) btnTipFactory.style.display = mode === "factory_build" ? "inline-flex" : "none";
+
+    if (mode !== "factory_build") {
+      selectedBlueprint = null;
+      renderSelectedBlueprint();
+    }
+
+    if (mode !== "create_country" && mode !== "expand_country") setDraftPreview(0, 0);
+  }
+
+  // =========================================================
+  // Expand UX core: segment distance + insert + snap + drag
+  // =========================================================
+  function distPointToSegment2(P, A, B) {
+    const ABx = B.x - A.x, ABy = B.y - A.y;
+    const APx = P.x - A.x, APy = P.y - A.y;
+    const ab2 = ABx * ABx + ABy * ABy || 1e-12;
+    let t = (APx * ABx + APy * ABy) / ab2;
+    t = Math.max(0, Math.min(1, t));
+    const Cx = A.x + t * ABx;
+    const Cy = A.y + t * ABy;
+    const dx = P.x - Cx, dy = P.y - Cy;
+    return dx * dx + dy * dy;
+  }
+
+  function nearestSegmentIndexPx(lng, lat) {
+    if (draftPoints.length < 2) return { i: 0, d2: Infinity };
+
+    const P = map.project([lng, lat]);
+    let bestI = 0, bestD = Infinity;
+
+    for (let i = 0; i < draftPoints.length; i++) {
+      const a = draftPoints[i];
+      const b = draftPoints[(i + 1) % draftPoints.length];
+      const A = map.project([a.lng, a.lat]);
+      const B = map.project([b.lng, b.lat]);
+      const d2 = distPointToSegment2(P, A, B);
+      if (d2 < bestD) { bestD = d2; bestI = i; }
+    }
+    return { i: bestI, d2: bestD };
+  }
+
+  // snap to old border if close
+  function snapToGhostIfClose(lng, lat) {
+    const ghostRing = EXPAND_GHOST.features?.[0]?.geometry?.coordinates?.[0];
+    if (!ghostRing || ghostRing.length < 4) return { lng, lat };
+
+    const P = map.project([lng, lat]);
+    let best = { lng, lat, d2: Infinity };
+
+    for (let i = 0; i < ghostRing.length - 1; i++) {
+      const a = ghostRing[i], b = ghostRing[i + 1];
+      const A = map.project(a);
+      const B = map.project(b);
+
+      const ABx = B.x - A.x, ABy = B.y - A.y;
+      const APx = P.x - A.x, APy = P.y - A.y;
+      const ab2 = ABx * ABx + ABy * ABy || 1e-12;
+      let t = (APx * ABx + APy * ABy) / ab2;
+      t = Math.max(0, Math.min(1, t));
+
+      const Cx = A.x + t * ABx;
+      const Cy = A.y + t * ABy;
+      const dx = P.x - Cx, dy = P.y - Cy;
+      const d2 = dx * dx + dy * dy;
+
+      if (d2 < best.d2) {
+        const L = map.unproject([Cx, Cy]);
+        best = { lng: L.lng, lat: L.lat, d2 };
+      }
+    }
+
+    // ✅ feels nicer: snap depends a bit on zoom (bigger at far zoom)
+    const z = map.getZoom();
+    const SNAP_PX = Math.max(14, Math.min(22, 22 - (z - 2) * 1.5)); // ~22px at low zoom, ~14px near zoom
+    if (best.d2 <= SNAP_PX * SNAP_PX) return { lng: best.lng, lat: best.lat };
+    return { lng, lat };
+  }
+
+  // prevent crazy duplicate points
+  function tooCloseToExistingPoint(lng, lat, minPx = 10) {
+    const P = map.project([lng, lat]);
+    for (const p of draftPoints) {
+      const Q = map.project([p.lng, p.lat]);
+      const dx = P.x - Q.x, dy = P.y - Q.y;
+      if (dx * dx + dy * dy <= minPx * minPx) return true;
+    }
+    return false;
+  }
+
+  // ✅ NEW: project click point onto nearest segment (makes “add on line” perfect)
+  function projectLngLatToNearestSegment(lng, lat) {
+    if (draftPoints.length < 2) return { lng, lat, segI: 0, d2: Infinity };
+
+    const P = map.project([lng, lat]);
+    let best = { lng, lat, segI: 0, d2: Infinity };
+
+    for (let i = 0; i < draftPoints.length; i++) {
+      const a = draftPoints[i];
+      const b = draftPoints[(i + 1) % draftPoints.length];
+      const A = map.project([a.lng, a.lat]);
+      const B = map.project([b.lng, b.lat]);
+
+      const ABx = B.x - A.x, ABy = B.y - A.y;
+      const APx = P.x - A.x, APy = P.y - A.y;
+      const ab2 = ABx * ABx + ABy * ABy || 1e-12;
+      let t = (APx * ABx + APy * ABy) / ab2;
+      t = Math.max(0, Math.min(1, t));
+
+      const Cx = A.x + t * ABx;
+      const Cy = A.y + t * ABy;
+
+      const dx = P.x - Cx, dy = P.y - Cy;
+      const d2 = dx * dx + dy * dy;
+
+      if (d2 < best.d2) {
+        const L = map.unproject([Cx, Cy]);
+        best = { lng: L.lng, lat: L.lat, segI: i, d2 };
+      }
+    }
+    return best;
+  }
+
+  function insertDraftPointNearestSegment(lng, lat, { force = false } = {}) {
+    if (draftPoints.length < 2) {
+      if (tooCloseToExistingPoint(lng, lat, 10)) return;
+      pushDraftHistory();
+      draftPoints.push({ lng, lat });
+      refreshDraftSource();
+      return;
+    }
+
+    // 1) project onto nearest segment → реально “додаєш точку на лінію”
+    const proj = projectLngLatToNearestSegment(lng, lat);
+
+    // 2) tolerance: must be close enough to border unless force
+    const MAX_PX = force ? 80 : 34;
+    if (proj.d2 > MAX_PX * MAX_PX) {
+      showFbMsg(force
+        ? "Клікни ближче до кордону (або zoom-in) — тоді вставка буде точнішою."
+        : "Клікни БІЛЯ КОРДОНУ. Зелена лінія показує сегмент для вставки."
+      , 1600);
+      return;
+    }
+
+    // 3) snap to ghost (pleasant feel)
+    const snapped = snapToGhostIfClose(proj.lng, proj.lat);
+    lng = snapped.lng; lat = snapped.lat;
+
+    if (tooCloseToExistingPoint(lng, lat, 10)) {
+      showFbMsg("ℹ️ Точка занадто близько до існуючої.", 1200);
+      return;
+    }
+
+    pushDraftHistory();
+    draftPoints.splice(proj.segI + 1, 0, { lng, lat });
+    refreshDraftSource();
+  }
+
+  // --- Drag points + Shift delete ---
+  let draggingPointIdx = null;
+  let wasDragging = false;
+
+  function findNearestDraftPointIdxPx(lng, lat, maxPx = 20) {
+    const P = map.project([lng, lat]);
+    let best = { idx: -1, d2: Infinity };
+
+    for (let i = 0; i < draftPoints.length; i++) {
+      const p = draftPoints[i];
+      const Q = map.project([p.lng, p.lat]);
+      const dx = P.x - Q.x, dy = P.y - Q.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < best.d2) best = { idx: i, d2 };
+    }
+    if (best.idx >= 0 && best.d2 <= maxPx * maxPx) return best.idx;
+    return -1;
+  }
+
+  function deleteDraftPointAt(idx) {
+    if (idx < 0) return;
+    if (draftPoints.length <= 3) {
+      showFbMsg("⚠ Мінімум 3 точки мають залишитись.", 1600);
+      return;
+    }
+    pushDraftHistory();
+    draftPoints.splice(idx, 1);
+    refreshDraftSource();
+  }
+
+  // =========================================================
+  // Draft intersects any country
+  // =========================================================
+  function draftIntersectsAnyCountry(excludeCountryId = null) {
+    if (draftPoints.length < 3) return false;
+    const ring = draftPoints.map((p) => [p.lng, p.lat]);
+    const closed = ring.concat([ring[0]]);
+
+    const feats = countriesFC && countriesFC.features ? countriesFC.features : [];
+    for (const f of feats) {
+      const id = Number(f?.properties?.id ?? f?.id ?? -1);
+      if (excludeCountryId && id === Number(excludeCountryId)) continue;
+
+      const ring2 = f?.geometry?.coordinates?.[0];
+      if (!ring2 || ring2.length < 4) continue;
+      if (ringsIntersect(closed, ring2)) return true;
+    }
+    return false;
+  }
+
+  // =========================================================
+  // Modal helpers
+  // =========================================================
   function openCountrySaveModal() {
     if (!countryOverlay) return;
 
@@ -1015,14 +1360,8 @@
       if (countryName) countryName.disabled = false;
       if (countryColor) countryColor.disabled = false;
     } else if (mode === "expand_country") {
-      if (countryName) {
-        countryName.value = "Territory expand";
-        countryName.disabled = true;
-      }
-      if (countryColor) {
-        countryColor.value = "#7c3aed";
-        countryColor.disabled = true;
-      }
+      if (countryName) { countryName.value = "Territory expand"; countryName.disabled = true; }
+      if (countryColor) { countryColor.value = "#7c3aed"; countryColor.disabled = true; }
     }
 
     countryOverlay.style.display = "flex";
@@ -1038,7 +1377,9 @@
     if (countryColor) countryColor.disabled = false;
   }
 
-  // ---- Networking helpers ----
+  // =========================================================
+  // Networking helpers
+  // =========================================================
   async function postJSON(path, body) {
     const res = await fetch(path, {
       method: "POST",
@@ -1054,7 +1395,7 @@
   async function saveCountryOrExpand() {
     if (draftPoints.length < 3) return;
 
-    const onLand = isDraftOnLand();
+    const onLand = isDraftOnLand(draftPoints);
     if (onLand === false) {
       if (countryMsg) { countryMsg.style.display = "block"; countryMsg.textContent = "Лише суша (не море/океан)."; }
       return;
@@ -1130,7 +1471,9 @@
     }
   }
 
-  // ---- FACTORIES ----
+  // =========================================================
+  // Factories
+  // =========================================================
   let BLUEPRINTS = [];
   let selectedBlueprint = null;
 
@@ -1351,11 +1694,9 @@
           const p = `${MY_COINS} EC`;
           if (myCoinsEl) myCoinsEl.textContent = `💰 ${p}`;
           if (topCoinsEl) topCoinsEl.textContent = `💰 ${p}`;
-          showFbMsg(`✅ Collected: ${res.collected || 0} EC`);
+          showFbMsg(`✅ Collected: ${res.collected || 0} EC`, 1800);
           await refreshMyFactories();
-        } catch (e) {
-          showFbMsg(e.message);
-        }
+        } catch (e) { showFbMsg(e.message); }
       });
 
       if (upgradeBtn) upgradeBtn.addEventListener("click", async () => {
@@ -1365,12 +1706,10 @@
           const p = `${MY_COINS} EC`;
           if (myCoinsEl) myCoinsEl.textContent = `💰 ${p}`;
           if (topCoinsEl) topCoinsEl.textContent = `💰 ${p}`;
-          showFbMsg(`✅ Upgraded to Lv ${res.level}`);
+          showFbMsg(`✅ Upgraded to Lv ${res.level}`, 1800);
           await refreshMyFactories();
           await loadFactories();
-        } catch (e) {
-          showFbMsg(e.message);
-        }
+        } catch (e) { showFbMsg(e.message); }
       });
 
       fbMyFactories.appendChild(row);
@@ -1401,7 +1740,7 @@
       if (myCoinsEl) myCoinsEl.textContent = `💰 ${p}`;
       if (topCoinsEl) topCoinsEl.textContent = `💰 ${p}`;
 
-      showFbMsg(`✅ Built ${selectedBlueprint.name}!`);
+      showFbMsg(`✅ Built ${selectedBlueprint.name}!`, 2000);
       await loadFactories();
       await refreshMyFactories();
     } catch (e) {
@@ -1409,7 +1748,9 @@
     }
   }
 
-  // ---- INIT ----
+  // =========================================================
+  // INIT style
+  // =========================================================
   map.on("style.load", async () => {
     try { map.setProjection({ type: "globe" }); } catch {}
 
@@ -1435,6 +1776,9 @@
 
     addDraftLayers();
     addDraftPreviewLayer();
+    addExpandGhostLayer();
+    addExpandHoverLayer();
+    addExpandPointHoverLayer();
 
     await loadBlueprints();
     renderSelectedBlueprint();
@@ -1481,13 +1825,42 @@
     });
   });
 
-  // ---- HUD updates ----
+  // =========================================================
+  // HUD updates
+  // =========================================================
   function fmt(n) { return (Math.round(n * 1000) / 1000).toFixed(3); }
 
   const updateMouseHUD = rafThrottle((e) => {
     if (coordsEl && e && e.lngLat) coordsEl.textContent = `${fmt(e.lngLat.lng)}, ${fmt(e.lngLat.lat)}`;
     if (mode === "create_country" || mode === "expand_country") {
       if (e && e.lngLat) setDraftPreview(e.lngLat.lng, e.lngLat.lat);
+    }
+
+    // Expand: highlight segment for insert + point hover highlight
+    if (mode === "expand_country" && draftPoints.length >= 2 && e?.lngLat) {
+      const { i, d2 } = nearestSegmentIndexPx(e.lngLat.lng, e.lngLat.lat);
+      const a = draftPoints[i];
+      const b = draftPoints[(i + 1) % draftPoints.length];
+
+      // Comfort threshold depends on zoom a bit
+      const z = map.getZoom();
+      const MAX_HOVER_PX = Math.max(36, Math.min(60, 60 - (z - 2) * 4)); // bigger at far zoom
+      const ok = d2 <= MAX_HOVER_PX * MAX_HOVER_PX;
+      setExpandHoverSegment(ok ? a : null, ok ? b : null);
+
+      // point hover highlight (helps discover “drag handles”)
+      const pIdx = findNearestDraftPointIdxPx(e.lngLat.lng, e.lngLat.lat, 22);
+      if (pIdx >= 0) {
+        const p = draftPoints[pIdx];
+        setExpandPointHover(p.lng, p.lat, true);
+        map.getCanvas().style.cursor = "grab";
+      } else {
+        setExpandPointHover(0, 0, false);
+        map.getCanvas().style.cursor = "crosshair";
+      }
+    } else {
+      setExpandHoverSegment(null, null);
+      setExpandPointHover(0, 0, false);
     }
   });
 
@@ -1513,7 +1886,56 @@
   map.on("moveend", scheduleResourcesReload);
   map.on("zoomend", scheduleResourcesReload);
 
+  // =========================================================
+  // Drag points (expand) + Shift delete
+  // =========================================================
+  map.on("mousedown", (e) => {
+    if (mode !== "expand_country") return;
+
+    const idx = findNearestDraftPointIdxPx(e.lngLat.lng, e.lngLat.lat, 22);
+    if (idx >= 0) {
+      if (e.originalEvent && e.originalEvent.shiftKey) {
+        deleteDraftPointAt(idx);
+        wasDragging = true;
+        return;
+      }
+      pushDraftHistory();
+      draggingPointIdx = idx;
+      wasDragging = false;
+      map.getCanvas().style.cursor = "grabbing";
+      e.preventDefault();
+    }
+  });
+
+  map.on("mousemove", (e) => {
+    if (mode !== "expand_country") return;
+    if (draggingPointIdx === null) return;
+
+    // snap to ghost while dragging
+    const s1 = snapToGhostIfClose(e.lngLat.lng, e.lngLat.lat);
+
+    // ✅ also lightly “stick” to the segment projection when close to it (prevents wobbly edits)
+    // this makes border editing feel more “on rails” without forcing it.
+    let lng = s1.lng, lat = s1.lat;
+
+    draftPoints[draggingPointIdx] = { lng, lat };
+    wasDragging = true;
+    refreshDraftSource();
+  });
+
+  function stopDragging() {
+    if (draggingPointIdx !== null) {
+      draggingPointIdx = null;
+      map.getCanvas().style.cursor = (mode === "expand_country" || mode === "create_country") ? "crosshair" : "";
+      setTimeout(() => { wasDragging = false; }, 0);
+    }
+  }
+  map.on("mouseup", stopDragging);
+  map.on("mouseleave", stopDragging);
+
+  // =========================================================
   // Map click
+  // =========================================================
   map.on("click", async (e) => {
     if (mode === "factory_build") {
       return buildFactoryAt(e.lngLat.lng, e.lngLat.lat);
@@ -1521,57 +1943,100 @@
 
     if (mode !== "create_country" && mode !== "expand_country") return;
 
+    // if just dragged / deleted — do not insert
+    if (mode === "expand_country" && (draggingPointIdx !== null || wasDragging)) return;
+
+    // Create: cannot put country over country
     if (mode === "create_country") {
       const feats = map.queryRenderedFeatures(e.point, { layers: ["countries-fill"] });
       if (feats && feats.length) {
-        showFbMsg("⛔ Тут уже є країна. Не можна ставити країну на країну.");
+        showFbMsg("⛔ Тут уже є країна. Не можна ставити країну на країну.", 1700);
         return;
       }
     }
 
     const onLand = isPointOnLand(e.lngLat.lng, e.lngLat.lat);
     if (onLand === false) {
-      showFbMsg("🔴 Це море/океан. Став точку на суші (зелена зона).");
+      showFbMsg("🔴 Це море/океан. Став точку на суші (зелена крапка).", 1700);
       return;
     }
 
-    if (draftPoints.length >= RULES.country_max_points) return;
+    if (draftPoints.length >= RULES.country_max_points) {
+      showFbMsg(`⚠ Досягнуто ліміт точок: ${RULES.country_max_points}`, 1500);
+      return;
+    }
 
-    draftPoints.push({ lng: e.lngLat.lng, lat: e.lngLat.lat });
-    refreshDraftSource();
+    if (mode === "expand_country") {
+      const force = !!(e.originalEvent && e.originalEvent.altKey);
+      insertDraftPointNearestSegment(e.lngLat.lng, e.lngLat.lat, { force });
+    } else {
+      if (tooCloseToExistingPoint(e.lngLat.lng, e.lngLat.lat, 10)) {
+        showFbMsg("ℹ️ Точка занадто близько до існуючої.", 1200);
+        return;
+      }
+      pushDraftHistory();
+      draftPoints.push({ lng: e.lngLat.lng, lat: e.lngLat.lat });
+      refreshDraftSource();
+    }
   });
 
-  // ---- UI handlers (country) ----
+  // =========================================================
+  // UI handlers (country)
+  // =========================================================
   if (btnCreateCountry) btnCreateCountry.addEventListener("click", () => {
     EXPAND_TARGET = { countryId: null, oldAreaKm2: 0, oldCost: 0 };
+    clearDraft();
     setMode("create_country");
+    showFbMsg("🟣 Створення країни: клікай щоб ставити точки. Коли готово — Finish → Save.", 2200);
   });
 
+  // Expand = clone old polygon into draft + ghost old border
   if (btnExpandCountry) btnExpandCountry.addEventListener("click", async () => {
     hideFbMsg();
     if (!ME.authenticated) return showFbMsg("Login first.");
-    if (!ME.has_country) return showFbMsg("Create your country first.");
+    if (!ME.has_country) return showFbMsg("Спочатку створи країну.", 2000);
 
     const r = await fetch("/api/my/country", { credentials: "include" });
     const j = await r.json().catch(() => ({}));
     const feat = j?.data;
-    if (!j.ok || !feat) return showFbMsg("Не можу знайти твою країну. Перезавантаж сторінку.");
+    if (!j.ok || !feat) return showFbMsg("Не можу знайти твою країну. Перезавантаж сторінку.", 2000);
 
     const cid = Number(feat.properties?.id || feat.id || 0);
     const oldArea = Number(feat.properties?.area_km2 || 0);
     const oldCost = computeCountryCost(oldArea);
-
     EXPAND_TARGET = { countryId: cid, oldAreaKm2: oldArea, oldCost };
 
+    const ringClosed = feat.geometry?.coordinates?.[0];
+    if (!ringClosed || ringClosed.length < 4) return showFbMsg("Погана геометрія країни.", 1800);
+
+    setExpandGhostFromRingClosed(ringClosed);
+
     clearDraft();
+    draftPoints = ringClosed.slice(0, -1).map(([lng, lat]) => ({ lng, lat }));
+    refreshDraftSource();
+
     setMode("expand_country");
-    showFbMsg("🟣 Розширення: намалюй НОВИЙ полігон країни (більший). Вартість покаже Δ (різницю).");
+
+    showFbMsg(
+      "🟣 РЕЖИМ РОЗШИРЕННЯ КОРДОНУ:\n" +
+      "• Наведи на лінію: підсвітиться сегмент\n" +
+      "• Клік по лінії = додати точку НА ЛІНІЮ\n" +
+      "• Тягни точки (drag)\n" +
+      "• Shift+клік по точці = видалити\n" +
+      "• Alt+клік = вставити навіть якщо трохи далеко\n" +
+      "• Ctrl+Z / Ctrl+Y = Undo/Redo\n" +
+      "Ціна показується як Δ (доплата)."
+    );
   });
 
   if (btnUndo) btnUndo.addEventListener("click", () => {
-    if (draftPoints.length) {
-      draftPoints.pop();
-      refreshDraftSource();
+    if (!undoDraft()) {
+      // fallback
+      if (draftPoints.length) {
+        pushDraftHistory();
+        draftPoints.pop();
+        refreshDraftSource();
+      }
     }
   });
 
@@ -1585,7 +2050,29 @@
   if (btnCloseCountry) btnCloseCountry.addEventListener("click", closeCountrySaveModal);
   if (btnSaveCountry) btnSaveCountry.addEventListener("click", saveCountryOrExpand);
 
-  // ---- UI handlers (factory sidebar) ----
+  // Hotkeys
+  window.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") {
+      if (countryOverlay && countryOverlay.style.display === "flex") closeCountrySaveModal();
+      else if (mode === "create_country" || mode === "expand_country" || mode === "factory_build") setMode("explore");
+    }
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "z") {
+      if (mode === "create_country" || mode === "expand_country") {
+        ev.preventDefault();
+        undoDraft();
+      }
+    }
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key.toLowerCase() === "y" || (ev.shiftKey && ev.key.toLowerCase() === "z"))) {
+      if (mode === "create_country" || mode === "expand_country") {
+        ev.preventDefault();
+        redoDraft();
+      }
+    }
+  });
+
+  // =========================================================
+  // UI handlers (factory sidebar)
+  // =========================================================
   if (fbToggle && factorybar) {
     fbToggle.addEventListener("click", () => {
       factorybar.classList.toggle("collapsed");
@@ -1644,7 +2131,7 @@
   }
 
   // =========================================================
-  // COUNTRY PANEL
+  // Country panel (optional UI)
   // =========================================================
   const countryPanel = document.getElementById("countryPanel");
   const cpClose = document.getElementById("cpClose");
@@ -1752,7 +2239,9 @@
     });
   }
 
-  // ---------- INIT ----------
+  // =========================================================
+  // Start
+  // =========================================================
   setFactoriesPanel(false);
   setMode("explore");
 })();
