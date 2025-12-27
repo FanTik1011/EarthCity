@@ -8,4 +8,3 @@ python-dotenv
 gunicorn
 psycopg2-binary
 shapely
-Authlib

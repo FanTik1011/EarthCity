@@ -1,8 +1,6 @@
-// static/js/auth.js
 document.addEventListener("DOMContentLoaded", () => {
   const $ = (id) => document.getElementById(id);
 
-  // overlay + tabs
   const overlay = $("overlay");
   const tabLogin = $("tabLogin");
   const tabRegister = $("tabRegister");
@@ -11,80 +9,37 @@ document.addEventListener("DOMContentLoaded", () => {
   const panelRegister = $("panelRegister");
   const panelUnconfirmed = $("panelUnconfirmed");
 
-  // msg + dev link
   const msg = $("msg");
   const devLink = $("devLink");
 
-  // inputs
-  const loginEmail = $("loginEmail");
-  const loginPassword = $("loginPassword");
-  const regUsername = $("regUsername");
-  const regEmail = $("regEmail");
-  const regPassword = $("regPassword");
-
-  // buttons
   const btnLogin = $("btnLogin");
   const btnRegister = $("btnRegister");
   const btnResend = $("btnResend");
   const btnLogout = $("btnLogout");
-  const btnGoogle = $("btnGoogle");
 
-  // hud
   const userLabel = $("userLabel");
 
+  // ---- NEW: polling when unconfirmed ----
   let confirmPollTimer = null;
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  function startConfirmPolling() {
+    stopConfirmPolling();
+    confirmPollTimer = setInterval(async () => {
+      const me = await getMe().catch(() => null);
+      if (!me) return;
 
-  function show(el, on = true) {
-    if (!el) return;
-    el.style.display = on ? "" : "none";
-  }
+      // if logged out - stop
+      if (!me.authenticated) {
+        stopConfirmPolling();
+        return;
+      }
 
-  function setOverlayOpen(open) {
-    if (!overlay) return;
-    overlay.style.display = open ? "" : "none";
-    overlay.setAttribute("aria-hidden", open ? "false" : "true");
-  }
-
-  function setMsg(text, kind = "info") {
-    if (!msg) return;
-    if (!text) {
-      msg.style.display = "none";
-      msg.textContent = "";
-      msg.classList.remove("ok", "err");
-      return;
-    }
-    msg.style.display = "";
-    msg.textContent = text;
-    msg.classList.remove("ok", "err");
-    if (kind === "ok") msg.classList.add("ok");
-    if (kind === "err") msg.classList.add("err");
-  }
-
-  function setDevLink(url) {
-    if (!devLink) return;
-    if (!url) {
-      devLink.style.display = "none";
-      devLink.innerHTML = "";
-      return;
-    }
-    devLink.style.display = "";
-    devLink.innerHTML = `Dev link: <a href="${url}" target="_blank" rel="noreferrer noopener">${url}</a>`;
-  }
-
-  function selectTab(which) {
-    const isLogin = which === "login";
-
-    tabLogin?.classList.toggle("active", isLogin);
-    tabRegister?.classList.toggle("active", !isLogin);
-
-    show(panelLogin, isLogin);
-    show(panelRegister, !isLogin);
-    show(panelUnconfirmed, false);
-
-    setMsg("");
-    setDevLink(null);
+      // once confirmed -> refresh UI and stop
+      if (me.is_confirmed) {
+        stopConfirmPolling();
+        await refreshMe();
+      }
+    }, 2000);
   }
 
   function stopConfirmPolling() {
@@ -93,231 +48,166 @@ document.addEventListener("DOMContentLoaded", () => {
       confirmPollTimer = null;
     }
   }
+  // --------------------------------------
+
+  function showMsg(text) {
+    msg.style.display = "block";
+    msg.textContent = text;
+  }
+  function clearMsg() {
+    msg.style.display = "none";
+    msg.textContent = "";
+  }
+  function showDevLink(link) {
+    if (!link) {
+      devLink.style.display = "none";
+      devLink.textContent = "";
+      return;
+    }
+    devLink.style.display = "block";
+    devLink.textContent = `DEV link: ${link}`;
+  }
+
+  function switchTab(which) {
+    clearMsg();
+    showDevLink(null);
+
+    tabLogin.classList.toggle("active", which === "login");
+    tabRegister.classList.toggle("active", which === "register");
+
+    panelLogin.style.display = which === "login" ? "block" : "none";
+    panelRegister.style.display = which === "register" ? "block" : "none";
+    panelUnconfirmed.style.display = "none";
+
+    stopConfirmPolling();
+  }
+
+  function showUnconfirmed() {
+    clearMsg();
+    showDevLink(null);
+
+    panelLogin.style.display = "none";
+    panelRegister.style.display = "none";
+    panelUnconfirmed.style.display = "block";
+
+    // NEW: while user is unconfirmed, keep checking confirmation status
+    startConfirmPolling();
+  }
+
+  async function postJSON(path, body) {
+    const res = await fetch(path, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {})
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
 
   async function getMe() {
     const res = await fetch("/api/me", { credentials: "include" });
     return await res.json();
   }
 
-  function applyMeToUI(me) {
-    const authed = !!me?.authenticated;
-
-    if (btnLogout) btnLogout.style.display = authed ? "" : "none";
-    if (userLabel) userLabel.textContent = authed ? (me.username || "User") : "Guest";
-
-    // call coin updater if page provided it
-    if (typeof window.updateCoins === "function") {
-      window.updateCoins();
-    }
-  }
-
-  async function refreshAuthState({ openOverlayIfGuest = true } = {}) {
+  async function refreshMe() {
     const me = await getMe().catch(() => null);
     if (!me) return;
 
-    applyMeToUI(me);
+    if (me.authenticated) {
+      userLabel.textContent = me.username || "User";
+      btnLogout.style.display = "inline-flex";
 
-    if (!me.authenticated) {
-      stopConfirmPolling();
-      if (openOverlayIfGuest) {
-        selectTab("login");
-        setOverlayOpen(true);
-      }
-      return;
-    }
-
-    // authenticated
-    if (me.is_blocked) {
-      setOverlayOpen(true);
-      selectTab("login");
-      setMsg("Акаунт заблоковано адміністратором.", "err");
-      return;
-    }
-
-    if (!me.is_confirmed) {
-      // show unconfirmed panel
-      setOverlayOpen(true);
-      show(panelLogin, false);
-      show(panelRegister, false);
-      show(panelUnconfirmed, true);
-      setMsg("Підтверди email, щоб будувати країни та фабрики.", "err");
-      startConfirmPolling();
-      return;
-    }
-
-    // confirmed authed: close overlay
-    setOverlayOpen(false);
-    stopConfirmPolling();
-  }
-
-  function startConfirmPolling() {
-    stopConfirmPolling();
-    confirmPollTimer = setInterval(async () => {
-      const me = await getMe().catch(() => null);
-      if (!me) return;
-
-      applyMeToUI(me);
-
-      if (!me.authenticated) {
-        stopConfirmPolling();
-        return;
-      }
-      if (me.is_blocked) {
-        stopConfirmPolling();
-        setMsg("Акаунт заблоковано адміністратором.", "err");
-        return;
-      }
       if (me.is_confirmed) {
-        stopConfirmPolling();
-        setMsg("✅ Email підтверджено! Можеш грати.", "ok");
-        await sleep(600);
-        setOverlayOpen(false);
+        stopConfirmPolling(); // NEW
+        overlay.style.display = "none";
+        setTimeout(() => window.__earthMap && window.__earthMap.resize(), 60);
+      } else {
+        overlay.style.display = "flex";
+        showUnconfirmed();
       }
-    }, 3000);
-  }
-
-  async function postJSON(url, body) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify(body || {}),
-    });
-
-    let data = null;
-    try { data = await res.json(); } catch (e) {}
-    return { ok: res.ok, status: res.status, data };
-  }
-
-  // -------- Events --------
-
-  tabLogin?.addEventListener("click", () => selectTab("login"));
-  tabRegister?.addEventListener("click", () => selectTab("register"));
-
-  btnLogin?.addEventListener("click", async () => {
-    setMsg("");
-    setDevLink(null);
-
-    const email = (loginEmail?.value || "").trim().toLowerCase();
-    const password = loginPassword?.value || "";
-
-    if (!email || !email.includes("@")) return setMsg("Введи коректний email.", "err");
-    if (!password || password.length < 6) return setMsg("Пароль мінімум 6 символів.", "err");
-
-    btnLogin.disabled = true;
-    try {
-      const r = await postJSON("/api/login", { email, password });
-
-      if (!r.ok || !r.data?.ok) {
-        const err = r.data?.error || "Login failed.";
-        setMsg(err, "err");
-        return;
-      }
-
-      await refreshAuthState({ openOverlayIfGuest: false });
-    } finally {
-      btnLogin.disabled = false;
-    }
-  });
-
-  btnRegister?.addEventListener("click", async () => {
-    setMsg("");
-    setDevLink(null);
-
-    const username = (regUsername?.value || "").trim();
-    const email = (regEmail?.value || "").trim().toLowerCase();
-    const password = regPassword?.value || "";
-
-    if (username.length < 3) return setMsg("Username мінімум 3 символи.", "err");
-    if (!email || !email.includes("@") || !email.includes(".")) return setMsg("Некоректний email.", "err");
-    if (password.length < 6) return setMsg("Пароль мінімум 6 символів.", "err");
-
-    btnRegister.disabled = true;
-    try {
-      const r = await postJSON("/api/register", { username, email, password });
-
-      if (!r.ok || !r.data?.ok) {
-        const err = r.data?.error || "Register failed.";
-        setMsg(err, "err");
-        return;
-      }
-
-      // show unconfirmed panel right away
-      show(panelLogin, false);
-      show(panelRegister, false);
-      show(panelUnconfirmed, true);
-
-      setMsg("✅ Зареєстровано! Тепер підтверди email (Inbox/Spam).", "ok");
-      setDevLink(r.data?.dev_link || null);
-      startConfirmPolling();
-
-      // update HUD
-      await refreshAuthState({ openOverlayIfGuest: false });
-    } finally {
-      btnRegister.disabled = false;
-    }
-  });
-
-  btnResend?.addEventListener("click", async () => {
-    setMsg("");
-    setDevLink(null);
-
-    btnResend.disabled = true;
-    try {
-      const res = await fetch("/api/resend-confirmation", {
-        method: "POST",
-        credentials: "include",
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) {
-        setMsg(data.error || "Не вдалося надіслати лист.", "err");
-        return;
-      }
-
-      setMsg("📩 Лист відправлено ще раз. Перевір Inbox/Spam.", "ok");
-      setDevLink(data.dev_link || null);
-    } finally {
-      btnResend.disabled = false;
-    }
-  });
-
-  btnLogout?.addEventListener("click", async () => {
-    setMsg("");
-    setDevLink(null);
-
-    btnLogout.disabled = true;
-    try {
-      await fetch("/api/logout", { method: "POST", credentials: "include" });
-      stopConfirmPolling();
-      await refreshAuthState({ openOverlayIfGuest: true });
-    } finally {
-      btnLogout.disabled = false;
-    }
-  });
-
-  btnGoogle?.addEventListener("click", () => {
-    // return back here after OAuth
-    const next = encodeURIComponent(window.location.pathname + window.location.search);
-    window.location.href = "/auth/google?next=" + next;
-  });
-
-  // show useful messages from URL (?blocked=1 / ?google_error=1)
-  function handleUrlFlags() {
-    const p = new URLSearchParams(window.location.search);
-    if (p.get("blocked") === "1") {
-      setOverlayOpen(true);
-      selectTab("login");
-      setMsg("Акаунт заблоковано адміністратором.", "err");
-    }
-    if (p.get("google_error")) {
-      setOverlayOpen(true);
-      selectTab("login");
-      setMsg("Google-вхід не вдався. Перевір налаштування Redirect URI.", "err");
+    } else {
+      stopConfirmPolling(); // NEW
+      userLabel.textContent = "Guest";
+      btnLogout.style.display = "none";
+      overlay.style.display = "flex";
+      switchTab("login");
     }
   }
 
-  // initial
-  handleUrlFlags();
-  refreshAuthState({ openOverlayIfGuest: true });
+  // Extra: if user returns to tab, refresh state (very useful after clicking confirm link)
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshMe();
+  });
+
+  tabLogin.addEventListener("click", (e) => { e.preventDefault(); switchTab("login"); });
+  tabRegister.addEventListener("click", (e) => { e.preventDefault(); switchTab("register"); });
+
+  btnLogin.addEventListener("click", async (e) => {
+    e.preventDefault();
+    clearMsg(); showDevLink(null);
+
+    const email = ($("loginEmail").value || "").trim().toLowerCase();
+    const password = $("loginPassword").value || "";
+
+    try {
+      const data = await postJSON("/api/login", { email, password });
+      if (!data.is_confirmed) {
+        showUnconfirmed();
+        showMsg("Підтверди email, щоб отримати доступ. Після підтвердження повернись на вкладку — ми перевіримо автоматично ✅");
+      }
+      await refreshMe();
+    } catch (err) {
+      showMsg(err.message);
+    }
+  });
+
+  btnRegister.addEventListener("click", async (e) => {
+    e.preventDefault();
+    clearMsg(); showDevLink(null);
+
+    const username = ($("regUsername").value || "").trim();
+    const email = ($("regEmail").value || "").trim().toLowerCase();
+    const password = $("regPassword").value || "";
+
+    try {
+      const data = await postJSON("/api/register", { username, email, password });
+      showUnconfirmed();
+      showMsg("Ми надіслали лист ✅ Перевір Inbox/Spam. Після кліку по лінку просто повернись на вкладку — підтягнеться автоматично.");
+      if (data.sent === false && data.dev_link) showDevLink(data.dev_link);
+      await refreshMe();
+    } catch (err) {
+      showMsg(err.message);
+    }
+  });
+
+  btnResend.addEventListener("click", async (e) => {
+    e.preventDefault();
+    clearMsg(); showDevLink(null);
+
+    try {
+      const data = await postJSON("/api/resend-confirmation", {});
+      showMsg("Лист відправлено ще раз ✅");
+      if (data.sent === false && data.dev_link) showDevLink(data.dev_link);
+    } catch (err) {
+      showMsg(err.message);
+    }
+  });
+
+  btnLogout.addEventListener("click", async (e) => {
+    e.preventDefault();
+    clearMsg(); showDevLink(null);
+
+    try {
+      await postJSON("/api/logout", {});
+      overlay.style.display = "flex";
+      switchTab("login");
+      await refreshMe();
+    } catch (err) {
+      showMsg(err.message);
+    }
+  });
+
+  refreshMe();
 });

@@ -5,7 +5,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from flask import Flask
 
 from .config import Config
-from .extensions import db, mail, login_manager, oauth
+from .extensions import db, mail, login_manager
 from .db_init import init_db
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -23,20 +23,6 @@ def create_app():
     mail.init_app(app)
     login_manager.init_app(app)
     login_manager.login_view = None
-
-    # ✅ Google OAuth init + register provider
-    oauth.init_app(app)
-
-    if app.config.get("GOOGLE_CLIENT_ID") and app.config.get("GOOGLE_CLIENT_SECRET"):
-        oauth.register(
-            name="google",
-            client_id=app.config["GOOGLE_CLIENT_ID"],
-            client_secret=app.config["GOOGLE_CLIENT_SECRET"],
-            server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-            client_kwargs={"scope": "openid email profile"},
-        )
-    else:
-        log.warning("Google OAuth disabled: GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not set")
 
     # blueprints
     from .blueprints.pages import bp_pages

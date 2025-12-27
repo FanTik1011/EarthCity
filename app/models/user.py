@@ -6,29 +6,12 @@ from ..extensions import db
 START_COINS = int(os.getenv("START_COINS", "5000"))
 
 class User(db.Model, UserMixin):
-    __tablename__ = "user"
-
     id = db.Column(db.Integer, primary_key=True)
-
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(255), unique=True, nullable=False)
-
-    # ✅ Для Google-логіну пароль може бути відсутній
-    password_hash = db.Column(db.String(255), nullable=True)
-
-    # ✅ Хто створив акаунт: local / google
-    auth_provider = db.Column(db.String(16), default="local", nullable=False)
-
-    # ✅ Унікальний ID користувача в Google (sub)
-    google_sub = db.Column(db.String(64), unique=True, nullable=True)
-
-    # ✅ Додаткові дані з Google (не критично, але корисно)
-    full_name = db.Column(db.String(120), nullable=True)
-    avatar_url = db.Column(db.String(500), nullable=True)
-
+    password_hash = db.Column(db.String(255), nullable=False)
     is_confirmed = db.Column(db.Boolean, default=False, nullable=False)
     confirmed_at = db.Column(db.DateTime, nullable=True)
-
     coins = db.Column(db.Integer, default=START_COINS, nullable=False)
 
     # starter bonus lock
