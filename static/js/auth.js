@@ -1,3 +1,4 @@
+// static/js/auth.js
 document.addEventListener("DOMContentLoaded", () => {
   const $ = (id) => document.getElementById(id);
 
@@ -19,7 +20,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const userLabel = $("userLabel");
 
-  // ---- NEW: polling when unconfirmed ----
+  // Optional: close factories sidebar close buttons duplication fix
+  const fbClose = $("fbClose");
+  const fbClose2 = $("fbClose2");
+  if (fbClose2 && fbClose) fbClose2.addEventListener("click", () => fbClose.click());
+
+  // ---- polling when unconfirmed ----
   let confirmPollTimer = null;
 
   function startConfirmPolling() {
@@ -28,13 +34,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const me = await getMe().catch(() => null);
       if (!me) return;
 
-      // if logged out - stop
       if (!me.authenticated) {
         stopConfirmPolling();
         return;
       }
 
-      // once confirmed -> refresh UI and stop
       if (me.is_confirmed) {
         stopConfirmPolling();
         await refreshMe();
@@ -48,24 +52,42 @@ document.addEventListener("DOMContentLoaded", () => {
       confirmPollTimer = null;
     }
   }
-  // --------------------------------------
+  // ---------------------------------
+
+  // ✅ Critical fix: overlay must NOT be aria-hidden=true while user interacts with it
+  function overlayOpen(focusEl) {
+    overlay.style.display = "flex";
+    overlay.setAttribute("aria-hidden", "false");
+    // safe focus (avoid aria-hidden/focus warnings)
+    if (focusEl) setTimeout(() => focusEl.focus(), 0);
+  }
+
+  function overlayClose() {
+    // remove focus from inside overlay before hiding
+    if (overlay.contains(document.activeElement)) document.activeElement.blur();
+    overlay.style.display = "none";
+    overlay.setAttribute("aria-hidden", "true");
+  }
 
   function showMsg(text) {
     msg.style.display = "block";
     msg.textContent = text;
   }
+
   function clearMsg() {
     msg.style.display = "none";
     msg.textContent = "";
   }
-  function showDevLink(link) {
+
+  function showDevLink(link, mailError) {
     if (!link) {
       devLink.style.display = "none";
       devLink.textContent = "";
       return;
     }
     devLink.style.display = "block";
-    devLink.textContent = `DEV link: ${link}`;
+    // покажемо й причину, якщо сервер вернув mail_error (дуже корисно на Heroku)
+    devLink.textContent = mailError ? `DEV link: ${link}\nMAIL: ${mailError}` : `DEV link: ${link}`;
   }
 
   function switchTab(which) {
@@ -80,6 +102,13 @@ document.addEventListener("DOMContentLoaded", () => {
     panelUnconfirmed.style.display = "none";
 
     stopConfirmPolling();
+
+    // фокус на перше поле
+    if (which === "login") {
+      overlayOpen($("loginEmail"));
+    } else {
+      overlayOpen($("regUsername"));
+    }
   }
 
   function showUnconfirmed() {
@@ -90,8 +119,8 @@ document.addEventListener("DOMContentLoaded", () => {
     panelRegister.style.display = "none";
     panelUnconfirmed.style.display = "block";
 
-    // NEW: while user is unconfirmed, keep checking confirmation status
     startConfirmPolling();
+    overlayOpen(btnResend);
   }
 
   async function postJSON(path, body) {
@@ -120,33 +149,39 @@ document.addEventListener("DOMContentLoaded", () => {
       btnLogout.style.display = "inline-flex";
 
       if (me.is_confirmed) {
-        stopConfirmPolling(); // NEW
-        overlay.style.display = "none";
+        stopConfirmPolling();
+        overlayClose();
         setTimeout(() => window.__earthMap && window.__earthMap.resize(), 60);
       } else {
-        overlay.style.display = "flex";
         showUnconfirmed();
       }
     } else {
-      stopConfirmPolling(); // NEW
+      stopConfirmPolling();
       userLabel.textContent = "Guest";
       btnLogout.style.display = "none";
-      overlay.style.display = "flex";
       switchTab("login");
     }
   }
 
-  // Extra: if user returns to tab, refresh state (very useful after clicking confirm link)
+  // Extra: if user returns to tab (after clicking confirm link), refresh state
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refreshMe();
   });
 
-  tabLogin.addEventListener("click", (e) => { e.preventDefault(); switchTab("login"); });
-  tabRegister.addEventListener("click", (e) => { e.preventDefault(); switchTab("register"); });
+  tabLogin.addEventListener("click", (e) => {
+    e.preventDefault();
+    switchTab("login");
+  });
+
+  tabRegister.addEventListener("click", (e) => {
+    e.preventDefault();
+    switchTab("register");
+  });
 
   btnLogin.addEventListener("click", async (e) => {
     e.preventDefault();
-    clearMsg(); showDevLink(null);
+    clearMsg();
+    showDevLink(null);
 
     const email = ($("loginEmail").value || "").trim().toLowerCase();
     const password = $("loginPassword").value || "";
@@ -165,7 +200,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnRegister.addEventListener("click", async (e) => {
     e.preventDefault();
-    clearMsg(); showDevLink(null);
+    clearMsg();
+    showDevLink(null);
 
     const username = ($("regUsername").value || "").trim();
     const email = ($("regEmail").value || "").trim().toLowerCase();
@@ -173,9 +209,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       const data = await postJSON("/api/register", { username, email, password });
+
       showUnconfirmed();
-      showMsg("Ми надіслали лист ✅ Перевір Inbox/Spam. Після кліку по лінку просто повернись на вкладку — підтягнеться автоматично.");
-      if (data.sent === false && data.dev_link) showDevLink(data.dev_link);
+
+      if (data.sent) {
+        showMsg("Ми надіслали лист ✅ Перевір Inbox/Spam. Після кліку по лінку просто повернись на вкладку — підтягнеться автоматично.");
+        showDevLink(null);
+      } else {
+        showMsg("Не вдалося надіслати лист 😕 Я покажу dev-link (і причину), щоб ти все одно міг підтвердити.");
+        if (data.dev_link) showDevLink(data.dev_link, data.mail_error);
+      }
+
       await refreshMe();
     } catch (err) {
       showMsg(err.message);
@@ -184,12 +228,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnResend.addEventListener("click", async (e) => {
     e.preventDefault();
-    clearMsg(); showDevLink(null);
+    clearMsg();
+    showDevLink(null);
 
     try {
       const data = await postJSON("/api/resend-confirmation", {});
-      showMsg("Лист відправлено ще раз ✅");
-      if (data.sent === false && data.dev_link) showDevLink(data.dev_link);
+      if (data.sent) {
+        showMsg("Лист відправлено ще раз ✅ Перевір Inbox/Spam.");
+      } else {
+        showMsg("Не вдалося надіслати лист 😕 Я покажу dev-link (і причину).");
+        if (data.dev_link) showDevLink(data.dev_link, data.mail_error);
+      }
     } catch (err) {
       showMsg(err.message);
     }
@@ -197,11 +246,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnLogout.addEventListener("click", async (e) => {
     e.preventDefault();
-    clearMsg(); showDevLink(null);
+    clearMsg();
+    showDevLink(null);
 
     try {
       await postJSON("/api/logout", {});
-      overlay.style.display = "flex";
+      overlayOpen($("loginEmail"));
       switchTab("login");
       await refreshMe();
     } catch (err) {
@@ -209,5 +259,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // init
   refreshMe();
 });

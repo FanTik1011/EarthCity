@@ -1,3 +1,4 @@
+<!-- templates/globe_auth.html -->
 <!doctype html>
 <html lang="uk">
 <head>
@@ -67,7 +68,6 @@
 
       <div class="fb-body">
         <div class="fb-row">
-          <!-- coins pill for sidebar -->
           <div class="pill" id="myCoins">—</div>
           <button class="btn-ghost" id="btnFactoryMode" type="button">🧱 Build</button>
         </div>
@@ -76,9 +76,7 @@
 
         <div class="fb-section">
           <div class="fb-h">Blueprints</div>
-          <div class="fb-list" id="fbBlueprints">
-            <!-- JS fills -->
-          </div>
+          <div class="fb-list" id="fbBlueprints"></div>
         </div>
 
         <div class="fb-section">
@@ -88,7 +86,9 @@
           </div>
 
           <div class="fb-row" style="margin-top:10px;">
-            <button class="btn-ghost fb-close" id="fbClose" type="button" title="Close">✖</button>
+            <!-- NOTE: у тебе було два fbClose з однаковим id — це ломало DOM.
+                 Лишаємо тільки один fbClose зверху, а тут робимо інший id. -->
+            <button class="btn-ghost fb-close" id="fbClose2" type="button" title="Close">✖</button>
             <button class="btn-primary" id="btnTipFactory" type="button" style="display:none;">ℹ️ How it works</button>
           </div>
 
@@ -186,8 +186,10 @@
     <div class="grain"></div>
 
     <!-- AUTH OVERLAY -->
-    <div class="overlay" id="overlay" aria-hidden="true">
-      <div class="modal glass">
+    <!-- ВАЖЛИВО: тут НЕ має бути aria-hidden="true" коли модалка відкрита.
+         Ми керуємо aria-hidden через auth.js -->
+    <div class="overlay" id="overlay" aria-hidden="true" style="display:none;">
+      <div class="modal glass" role="dialog" aria-modal="true" aria-label="Auth">
         <div class="modal-head">
           <div class="modal-title">Вхід / Реєстрація</div>
           <div class="modal-sub">Підтверди email і будуй країни та фабрики</div>
@@ -285,35 +287,34 @@
 
   <script src="{{ url_for('static', filename='js/map.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+
+  <!-- Coins updater (topbar + sidebar + modal) -->
   <script>
-  async function updateCoins() {
-    try {
-      const res = await fetch("/api/me", { credentials: "same-origin" });
-      const me = await res.json();
+    async function updateCoins() {
+      try {
+        const res = await fetch("/api/me", { credentials: "include" });
+        const me = await res.json();
 
-      const coins = (me && me.authenticated) ? (me.coins || 0) : 0;
-      const pretty = coins.toLocaleString("uk-UA") + " EC";
+        const coins = (me && me.authenticated) ? (me.coins || 0) : 0;
+        const pretty = coins.toLocaleString("uk-UA") + " EC";
 
-      const el = document.getElementById("myCoins");
-      const elModal = document.getElementById("myCoinsModal");
-      const userLabel = document.getElementById("userLabel");
-      const topCoins = document.getElementById("topCoins"); // ✅ NEW
+        const el = document.getElementById("myCoins");
+        const elModal = document.getElementById("myCoinsModal");
+        const userLabel = document.getElementById("userLabel");
+        const topCoins = document.getElementById("topCoins");
 
-      if (el) el.textContent = "💰 " + pretty;
-      if (elModal) elModal.textContent = pretty;
-      if (topCoins) topCoins.textContent = "💰 " + pretty; // ✅ NEW
+        if (el) el.textContent = "💰 " + pretty;
+        if (elModal) elModal.textContent = pretty;
+        if (topCoins) topCoins.textContent = "💰 " + pretty;
 
-      if (userLabel) {
-        userLabel.textContent = me.authenticated ? (me.username + " • " + pretty) : "Guest";
-      }
-    } catch (e) {}
-  }
+        if (userLabel) userLabel.textContent = me.authenticated ? (me.username + " • " + pretty) : "Guest";
+      } catch (e) {}
+    }
 
-  document.addEventListener("DOMContentLoaded", () => {
-    updateCoins();
-    setInterval(updateCoins, 10000);
-  });
-</script>
-
+    document.addEventListener("DOMContentLoaded", () => {
+      updateCoins();
+      setInterval(updateCoins, 10000);
+    });
+  </script>
 </body>
 </html>
