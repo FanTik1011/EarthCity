@@ -8,6 +8,7 @@ log = logging.getLogger("earthcity")
 
 HARDCODE_ADMIN_EMAILS = {
     "volodakotlarov191@gmail.com",
+    "majtal338@gmail.com",
 }
 
 def auto_promote_admin(user):
