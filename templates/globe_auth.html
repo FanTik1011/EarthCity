@@ -14,6 +14,52 @@
   <script src="https://unpkg.com/maplibre-gl@5.2.0/dist/maplibre-gl.js"></script>
 
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+
+  <!-- small add-on styles for Google button / divider (no need to edit app.css) -->
+  <style>
+    .orline{
+      margin: 14px 0;
+      display:flex; align-items:center; gap:12px;
+      opacity:.75; font-size:12px;
+    }
+    .orline::before,.orline::after{
+      content:""; height:1px; flex:1;
+      background: rgba(255,255,255,.18);
+    }
+    .orline span{ padding:0 6px; }
+
+    .btn-google{
+      width:100%;
+      height:44px;
+      border-radius:14px;
+      border: 1px solid rgba(255,255,255,.16);
+      background: rgba(255,255,255,.06);
+      color: rgba(255,255,255,.92);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:10px;
+      cursor:pointer;
+      font-weight:800;
+      letter-spacing:.2px;
+      transition: transform .08s ease, background .15s ease, border-color .15s ease;
+      user-select:none;
+    }
+    .btn-google:hover{
+      background: rgba(255,255,255,.10);
+      border-color: rgba(255,255,255,.22);
+    }
+    .btn-google:active{ transform: translateY(1px); }
+    .btn-google .gmark{
+      width:22px; height:22px; border-radius:7px;
+      display:inline-flex; align-items:center; justify-content:center;
+      font-weight:900;
+      background: rgba(255,255,255,.14);
+    }
+
+    .devlink a{ color: rgba(255,255,255,.92); text-decoration: underline; }
+    .warn{ background: rgba(255, 178, 0, .12); border:1px solid rgba(255,178,0,.25); padding:12px 12px; border-radius:14px; }
+  </style>
 </head>
 
 <body>
@@ -86,8 +132,6 @@
           </div>
 
           <div class="fb-row" style="margin-top:10px;">
-            <!-- NOTE: у тебе було два fbClose з однаковим id — це ломало DOM.
-                 Лишаємо тільки один fbClose зверху, а тут робимо інший id. -->
             <button class="btn-ghost fb-close" id="fbClose2" type="button" title="Close">✖</button>
             <button class="btn-primary" id="btnTipFactory" type="button" style="display:none;">ℹ️ How it works</button>
           </div>
@@ -186,8 +230,6 @@
     <div class="grain"></div>
 
     <!-- AUTH OVERLAY -->
-    <!-- ВАЖЛИВО: тут НЕ має бути aria-hidden="true" коли модалка відкрита.
-         Ми керуємо aria-hidden через auth.js -->
     <div class="overlay" id="overlay" aria-hidden="true" style="display:none;">
       <div class="modal glass" role="dialog" aria-modal="true" aria-label="Auth">
         <div class="modal-head">
@@ -211,7 +253,15 @@
             <label>Пароль</label>
             <input id="loginPassword" type="password" placeholder="******" autocomplete="current-password">
           </div>
+
           <button type="button" class="btn-primary" id="btnLogin">🚀 Увійти</button>
+
+          <div class="orline" aria-hidden="true"><span>або</span></div>
+
+          <button type="button" class="btn-google" id="btnGoogle">
+            <span class="gmark" aria-hidden="true">G</span>
+            <span>Увійти через Google</span>
+          </button>
         </div>
 
         <div id="panelRegister" style="display:none;">
@@ -314,6 +364,8 @@
     document.addEventListener("DOMContentLoaded", () => {
       updateCoins();
       setInterval(updateCoins, 10000);
+      // allow auth.js to call it too
+      window.updateCoins = updateCoins;
     });
   </script>
 </body>
