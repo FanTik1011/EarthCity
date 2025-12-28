@@ -166,3 +166,39 @@ def country_polygon_ring(country: Country):
         return (max(xs) - min(xs)) * (max(ys) - min(ys))
 
     return max(rings, key=bbox_area)
+    # ----------------------------
+# Market pricing (simple/stable)
+# ----------------------------
+RESOURCE_BASE_PRICES = {
+    "oil": 28,
+    "gas": 22,
+    "iron": 14,
+    "gold": 60,
+    "coal": 10,
+    "uranium": 75,
+    "rare": 90,
+    "water": 8,
+    "farmland": 12,
+    "fish": 11,
+    "wind": 16,
+    "solar": 16,
+    "hydro": 18,
+    "geo": 20,
+}
+
+def market_price(resource: str, side: str) -> int:
+    """
+    side: 'buy' or 'sell'
+    We use a spread so you can't print money by buying/selling instantly.
+    """
+    base = int(RESOURCE_BASE_PRICES.get(resource, 0))
+    if base <= 0:
+        return 0
+
+    if side == "sell":
+        return int(round(base * 0.85))  # country sells cheaper
+    if side == "buy":
+        return int(round(base * 1.15))  # country buys more expensive
+
+    return base
+

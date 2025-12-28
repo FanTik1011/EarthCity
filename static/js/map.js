@@ -2244,4 +2244,8 @@
   // =========================================================
   setFactoriesPanel(false);
   setMode("explore");
+  document.getElementById("btnMarket")?.addEventListener("click", () => {
+  window.open("/market", "_blank");
+});
+
 })();

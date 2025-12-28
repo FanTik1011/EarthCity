@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>EarthCity — Market</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/market.css') }}">
+</head>
+
+<body class="marketBody">
+  <!-- Sticky Header -->
+  <header class="mkHeader">
+    <div class="mkHeader__inner">
+      <div class="mkBrand">
+        <div class="mkLogo">EC</div>
+        <div class="mkBrand__text">
+          <div class="mkTitle">NPC Market</div>
+          <div class="mkSub" id="countryLine">Країна: —</div>
+        </div>
+      </div>
+
+      <div class="mkHeader__right">
+        <div class="mkPills">
+          <div class="mkPill" id="pillUser">👤 —</div>
+          <div class="mkPill" id="pillCoins">💰 —</div>
+        </div>
+
+        <div class="mkHeader__btns">
+          <a class="mkBtn mkBtn--ghost" href="/" title="Повернутись на карту">⬅️ На карту</a>
+          <button class="mkBtn mkBtn--primary" id="btnHarvest" title="Зібрати ресурси в межах країни">⛏️ HARVEST</button>
+          <button class="mkBtn mkBtn--ghost" id="btnHelp" title="Як працює маркет?">❓ Help</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="mkTabs">
+      <button class="mkMiniBtn" id="btnGoInv">📦 Склад</button>
+      <button class="mkMiniBtn" id="btnGoMarket">💱 Маркет</button>
+    </div>
+  </header>
+
+  <!-- Toast -->
+  <div class="mkToastWrap">
+    <div id="msg" class="mkToast"></div>
+  </div>
+
+  <main class="mkPage">
+    <!-- Hero -->
+    <section class="mkHero">
+      <div class="mkHero__left">
+        <div class="mkHero__title">Склад країни → продаж/купівля у NPC</div>
+        <div class="mkHero__desc">
+          Натисни <span class="mkBadge">HARVEST</span>, щоб перенести ресурси з нодів у <b>склад</b>.
+          Далі продавай зі <b>стікерів</b> або купуй у <b>NPC</b>.
+        </div>
+
+        <div class="mkTips">
+          <div class="mkTip"><div class="mkTip__i">📦</div><div><b>Стікери</b> показують що є на складі.</div></div>
+          <div class="mkTip"><div class="mkTip__i">💸</div><div><b>Sell</b> = миттєвий продаж у NPC по ціні Sell.</div></div>
+          <div class="mkTip"><div class="mkTip__i">🛒</div><div><b>Buy</b> = купівля у NPC по ціні Buy.</div></div>
+        </div>
+      </div>
+
+      <div class="mkHero__right">
+        <div class="mkCard mkCard--glow">
+          <div class="mkCard__title">🚀 Quick actions</div>
+          <div class="mkCard__sub">Зручно перескакувати по сторінці</div>
+
+          <div class="mkQuick">
+            <button class="mkBtn mkBtn--primary mkBtn--block" id="btnScrollInv">📦 До складу</button>
+            <button class="mkBtn mkBtn--ghost mkBtn--block" id="btnScrollMarket">💱 До маркету</button>
+          </div>
+
+          <div class="mkDivider"></div>
+
+          <div class="mkNote">
+            Якщо інвентар пустий — натисни <b>HARVEST</b>.
+            Якщо HARVEST нічого не дав — ноди не в межах країни або їх мало.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Inventory -->
+    <section class="mkSection" id="secInventory">
+      <div class="mkSection__head">
+        <div>
+          <div class="mkSection__title">📦 Склад країни</div>
+          <div class="mkSection__sub">Sell зі стікера → підтвердження → продаж.</div>
+        </div>
+        <div class="mkSection__right">
+          <span class="mkChip mkChip--live">● Live</span>
+          <span class="mkChip">Sell = NPC</span>
+        </div>
+      </div>
+
+      <div class="mkInventory" id="invGrid"></div>
+    </section>
+
+    <!-- NPC Market -->
+    <section class="mkSection" id="secMarket">
+      <div class="mkPanel active">
+        <div class="mkPanel__head">
+          <div class="mkPanel__title">🏦 NPC Market</div>
+          <div class="mkPanel__sub">Купуй ресурси в систему. Buy відкриває підтвердження.</div>
+        </div>
+
+        <div class="mkPanel__body">
+          <div class="mkFormRow">
+            <div class="mkField">
+              <div class="mkLabel">Resource</div>
+              <select id="buyRes" class="mkSelect"></select>
+            </div>
+
+            <div class="mkField mkField--tight">
+              <div class="mkLabel">Amount</div>
+              <input id="buyAmt" class="mkInput" type="number" min="0" step="1" value="10">
+            </div>
+
+            <div class="mkField mkField--tight">
+              <div class="mkLabel">&nbsp;</div>
+              <button id="btnBuy" class="mkBtn mkBtn--primary mkBtn--block">Buy</button>
+            </div>
+          </div>
+
+          <div class="mkInfoBox" id="buyInfo">Price: —</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="mkBottomSpace"></div>
+  </main>
+
+  <!-- Floating nav -->
+  <div class="mkFloat">
+    <button class="mkFloatBtn" id="fabTop" title="Вгору">⬆️</button>
+    <button class="mkFloatBtn" id="fabInv" title="Склад">📦</button>
+    <button class="mkFloatBtn" id="fabMk" title="Маркет">💱</button>
+  </div>
+
+  <!-- Help modal -->
+  <div class="mkModal" id="helpModal" aria-hidden="true">
+    <div class="mkModal__backdrop" data-close="1"></div>
+    <div class="mkModal__card">
+      <div class="mkModal__head">
+        <div class="mkModal__title">❓ Як працює NPC Market</div>
+        <button class="mkModal__x" data-close="1">✕</button>
+      </div>
+      <div class="mkModal__body">
+        <div class="mkSteps">
+          <div class="mkStep"><div class="mkStep__n">1</div><div class="mkStep__t"><b>HARVEST</b> → ресурси в склад.</div></div>
+          <div class="mkStep"><div class="mkStep__n">2</div><div class="mkStep__t"><b>Sell</b> зі стікера → монети +.</div></div>
+          <div class="mkStep"><div class="mkStep__n">3</div><div class="mkStep__t"><b>Buy</b> → ресурс +, монети -.</div></div>
+        </div>
+      </div>
+      <div class="mkModal__foot">
+        <button class="mkBtn mkBtn--ghost" data-close="1">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm modal (Sell/Buy) -->
+  <div class="mkModal" id="confirmModal" aria-hidden="true">
+    <div class="mkModal__backdrop" data-close="1"></div>
+    <div class="mkModal__card">
+      <div class="mkModal__head">
+        <div class="mkModal__title" id="confirmTitle">Confirm</div>
+        <button class="mkModal__x" data-close="1">✕</button>
+      </div>
+      <div class="mkModal__body">
+        <div class="mkConfirmBox">
+          <div class="mkConfirmRow"><div class="mkConfirmK">Action</div><div class="mkConfirmV" id="confirmAction">—</div></div>
+          <div class="mkConfirmRow"><div class="mkConfirmK">Resource</div><div class="mkConfirmV" id="confirmRes">—</div></div>
+          <div class="mkConfirmRow"><div class="mkConfirmK">Amount</div><div class="mkConfirmV" id="confirmAmt">—</div></div>
+          <div class="mkConfirmRow"><div class="mkConfirmK">Price</div><div class="mkConfirmV" id="confirmPrice">—</div></div>
+          <div class="mkConfirmRow"><div class="mkConfirmK">Total</div><div class="mkConfirmV" id="confirmTotal">—</div></div>
+        </div>
+        <div class="mkNote" id="confirmHint">—</div>
+      </div>
+      <div class="mkModal__foot">
+        <button class="mkBtn mkBtn--ghost" data-close="1">Cancel</button>
+        <button class="mkBtn mkBtn--primary" id="confirmDo">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/market_ui.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/market_page.js') }}"></script>
+</body>
+</html>

@@ -52,3 +52,7 @@ def confirm_email(token: str):
         ok=True,
         msg="Email підтверджено ✅ Повернись на вкладку з глобусом і зроби Login (або перезавантаж сторінку)."
     )
+# app/blueprints/pages.py
+@bp_pages.get("/market")
+def page_market():
+    return render_template("market.html")
