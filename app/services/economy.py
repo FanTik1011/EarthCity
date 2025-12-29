@@ -1,3 +1,4 @@
+# app/services/economy.py
 import os
 import json
 import math
@@ -6,6 +7,9 @@ from ..extensions import db
 from ..models import Country, Factory
 from .geo import haversine_km  # ✅ only this now
 
+# ----------------------------
+# Economy constants
+# ----------------------------
 START_COINS = int(os.getenv("START_COINS", "5000"))
 
 COUNTRY_BASE_COST = int(os.getenv("COUNTRY_BASE_COST", "800"))
@@ -19,16 +23,112 @@ FACTORY_MAX_PER_COUNTRY = int(os.getenv("FACTORY_MAX_PER_COUNTRY", "40"))
 FACTORY_ACCUM_CAP_HOURS = int(os.getenv("FACTORY_ACCUM_CAP_HOURS", "72"))
 FACTORY_PICK_RADIUS_KM = int(os.getenv("FACTORY_PICK_RADIUS_KM", "120"))
 
+# ----------------------------
+# ✅ Harder economy knobs (NO DB changes)
+# ----------------------------
+# >1 makes economy harder overall
+ECONOMY_DIFFICULTY = float(os.getenv("ECONOMY_DIFFICULTY", "1.25"))
+
+# global income multiplier (lower = less money)
+FACTORY_GLOBAL_MULT = float(os.getenv("FACTORY_GLOBAL_MULT", "0.82"))
+
+# level scaling step (was ~0.22, now smaller)
+FACTORY_LVL_STEP = float(os.getenv("FACTORY_LVL_STEP", "0.14"))
+
+# upkeep per hour: build_cost * rate (subtracted from income)
+FACTORY_UPKEEP_RATE = float(os.getenv("FACTORY_UPKEEP_RATE", "0.06"))
+
+# softcap: first N factories in country have no penalty, then diminishing returns
+FACTORY_SOFTCAP_FREE = int(os.getenv("FACTORY_SOFTCAP_FREE", "6"))
+FACTORY_SOFTCAP_PENALTY = float(os.getenv("FACTORY_SOFTCAP_PENALTY", "0.07"))
+FACTORY_MIN_MULT = float(os.getenv("FACTORY_MIN_MULT", "0.25"))
+
+# ----------------------------
+# Factory blueprints
+# (kept compatible; you can tweak build_cost/base_income if you want)
+# ----------------------------
 FACTORY_BLUEPRINTS = {
-    "steel_mill": {"name": "Steel Mill", "icon": "🏗️", "desc": "Iron+Coal → profit", "build_cost": 900, "upkeep": 0, "base_income_per_hour": 70, "requires": {"iron": 1, "coal": 1}},
-    "oil_refinery": {"name": "Oil Refinery", "icon": "🛢️", "desc": "Oil → money", "build_cost": 1100, "upkeep": 0, "base_income_per_hour": 95, "requires": {"oil": 1}},
-    "gas_plant": {"name": "Gas Plant", "icon": "🔥", "desc": "Gas → profit", "build_cost": 980, "upkeep": 0, "base_income_per_hour": 82, "requires": {"gas": 1}},
-    "hydro_plant": {"name": "Hydro Plant", "icon": "🌊", "desc": "Hydro → profit", "build_cost": 950, "upkeep": 0, "base_income_per_hour": 78, "requires": {"hydro": 1}},
-    "farm_complex": {"name": "Farm Complex", "icon": "🌾", "desc": "Farmland → profit", "build_cost": 650, "upkeep": 0, "base_income_per_hour": 52, "requires": {"farmland": 1}},
-    "waterworks": {"name": "Waterworks", "icon": "💧", "desc": "Water → profit", "build_cost": 720, "upkeep": 0, "base_income_per_hour": 50, "requires": {"water": 1}},
-    "rare_lab": {"name": "Rare Lab", "icon": "💎", "desc": "Rare → big profit", "build_cost": 1400, "upkeep": 0, "base_income_per_hour": 130, "requires": {"rare": 1}},
-    "gold_mint": {"name": "Gold Mint", "icon": "🪙", "desc": "Gold → big profit", "build_cost": 1350, "upkeep": 0, "base_income_per_hour": 125, "requires": {"gold": 1}},
-    "shipyard": {"name": "Shipyard", "icon": "⚓", "desc": "Fish → profit", "build_cost": 1000, "upkeep": 0, "base_income_per_hour": 88, "requires": {"fish": 1}},
+    "steel_mill": {
+        "name": "Steel Mill",
+        "icon": "🏗️",
+        "desc": "Iron+Coal → profit",
+        "build_cost": 900,
+        "upkeep": 0,
+        "base_income_per_hour": 70,
+        "requires": {"iron": 1, "coal": 1},
+    },
+    "oil_refinery": {
+        "name": "Oil Refinery",
+        "icon": "🛢️",
+        "desc": "Oil → money",
+        "build_cost": 1100,
+        "upkeep": 0,
+        "base_income_per_hour": 95,
+        "requires": {"oil": 1},
+    },
+    "gas_plant": {
+        "name": "Gas Plant",
+        "icon": "🔥",
+        "desc": "Gas → profit",
+        "build_cost": 980,
+        "upkeep": 0,
+        "base_income_per_hour": 82,
+        "requires": {"gas": 1},
+    },
+    "hydro_plant": {
+        "name": "Hydro Plant",
+        "icon": "🌊",
+        "desc": "Hydro → profit",
+        "build_cost": 950,
+        "upkeep": 0,
+        "base_income_per_hour": 78,
+        "requires": {"hydro": 1},
+    },
+    "farm_complex": {
+        "name": "Farm Complex",
+        "icon": "🌾",
+        "desc": "Farmland → profit",
+        "build_cost": 650,
+        "upkeep": 0,
+        "base_income_per_hour": 52,
+        "requires": {"farmland": 1},
+    },
+    "waterworks": {
+        "name": "Waterworks",
+        "icon": "💧",
+        "desc": "Water → profit",
+        "build_cost": 720,
+        "upkeep": 0,
+        "base_income_per_hour": 50,
+        "requires": {"water": 1},
+    },
+    "rare_lab": {
+        "name": "Rare Lab",
+        "icon": "💎",
+        "desc": "Rare → big profit",
+        "build_cost": 1400,
+        "upkeep": 0,
+        "base_income_per_hour": 130,
+        "requires": {"rare": 1},
+    },
+    "gold_mint": {
+        "name": "Gold Mint",
+        "icon": "🪙",
+        "desc": "Gold → big profit",
+        "build_cost": 1350,
+        "upkeep": 0,
+        "base_income_per_hour": 125,
+        "requires": {"gold": 1},
+    },
+    "shipyard": {
+        "name": "Shipyard",
+        "icon": "⚓",
+        "desc": "Fish → profit",
+        "build_cost": 1000,
+        "upkeep": 0,
+        "base_income_per_hour": 88,
+        "requires": {"fish": 1},
+    },
 }
 
 def compute_country_cost(area_km2: float) -> int:
@@ -50,7 +150,9 @@ def point_in_ring(lng: float, lat: float, ring) -> bool:
     for i in range(n):
         xi, yi = ring[i][0], ring[i][1]
         xj, yj = ring[j][0], ring[j][1]
-        intersect = ((yi > lat) != (yj > lat)) and (lng < (xj - xi) * (lat - yi) / ((yj - yi) or 1e-12) + xi)
+        intersect = ((yi > lat) != (yj > lat)) and (
+            lng < (xj - xi) * (lat - yi) / ((yj - yi) or 1e-12) + xi
+        )
         if intersect:
             inside = not inside
         j = i
@@ -78,7 +180,6 @@ def country_outer_rings(country: Country):
             if isinstance(poly, list) and poly and isinstance(poly[0], list):
                 rings.append(poly[0])
 
-    # filter closed-ish rings
     rings = [r for r in rings if isinstance(r, list) and len(r) >= 4]
     return rings
 
@@ -104,7 +205,46 @@ def resources_near_point_in_country(resource_nodes, country: Country, lng: float
     return near
 
 
+def _country_factory_softcap_mult(country_id: int) -> float:
+    """
+    Diminishing returns for many factories in one country.
+    No DB schema changes: uses count() at runtime.
+    """
+    try:
+        cnt = (
+            db.session.query(Factory)
+            .filter(Factory.country_id == country_id)
+            .count()
+        )
+    except Exception:
+        cnt = 0
+
+    extra = max(0, int(cnt) - int(FACTORY_SOFTCAP_FREE))
+    mult = 1.0 - (extra * float(FACTORY_SOFTCAP_PENALTY))
+    return max(float(FACTORY_MIN_MULT), float(mult))
+
+
+def _factory_upkeep_per_hour(factory: Factory) -> float:
+    bp = FACTORY_BLUEPRINTS.get(factory.blueprint) or {}
+    build_cost = float(bp.get("build_cost", 0) or 0)
+    base_upkeep = float(bp.get("upkeep", 0) or 0)
+
+    # upkeep grows a bit with level (to prevent lvl snowball)
+    level = int(factory.level or 1)
+    lvl_mult = 1.0 + max(0, level - 1) * 0.10
+
+    upkeep = (base_upkeep + build_cost * float(FACTORY_UPKEEP_RATE)) * lvl_mult
+    return max(0.0, upkeep)
+
+
 def calc_factory_rate_per_hour(resource_nodes, factory: Factory) -> float:
+    """
+    Harder economy but compatible:
+    - harsher node multiplier curve
+    - smaller level scaling
+    - diminishing returns per-country (softcap)
+    - global multiplier + economy difficulty
+    """
     bp = FACTORY_BLUEPRINTS.get(factory.blueprint)
     if not bp:
         return 0.0
@@ -129,12 +269,33 @@ def calc_factory_rate_per_hour(resource_nodes, factory: Factory) -> float:
             strengths.append(best)
 
     eff = (sum(strengths) / len(strengths)) if strengths else 0.0
-    mult = 0.75 + 0.65 * eff
-    lvl_mult = 1.0 + (max(0, level - 1) * 0.22)
-    return base * mult * lvl_mult
+
+    # HARDER curve:
+    # Old: 0.75 + 0.65*eff => ~0.75..1.40
+    # New: 0.45 + 0.55*eff => ~0.45..1.00
+    node_mult = 0.45 + 0.55 * eff
+
+    # Smaller level growth
+    lvl_mult = 1.0 + (max(0, level - 1) * float(FACTORY_LVL_STEP))
+
+    # Diminishing returns for many factories in one country
+    softcap_mult = _country_factory_softcap_mult(factory.country_id)
+
+    # Combine
+    gross = base * node_mult * lvl_mult * softcap_mult
+
+    # Global economy difficulty + global multiplier
+    gross = gross * float(FACTORY_GLOBAL_MULT)
+    gross = gross / max(0.01, float(ECONOMY_DIFFICULTY))
+
+    return max(0.0, float(gross))
 
 
 def accrue_factory(resource_nodes, factory: Factory, now: datetime):
+    """
+    Accrue factory stored_coins since last_collected_at.
+    Now includes upkeep: net = max(0, gross - upkeep) * dt
+    """
     last = factory.last_collected_at or now
     dt_hours = (now - last).total_seconds() / 3600.0
     if dt_hours <= 0:
@@ -142,11 +303,18 @@ def accrue_factory(resource_nodes, factory: Factory, now: datetime):
 
     dt_hours = min(dt_hours, FACTORY_ACCUM_CAP_HOURS)
 
-    rate = calc_factory_rate_per_hour(resource_nodes, factory)
-    gain = int(math.floor(rate * dt_hours))
+    gross_rate = calc_factory_rate_per_hour(resource_nodes, factory)
+    upkeep_rate = _factory_upkeep_per_hour(factory)
+
+    net_rate = max(0.0, gross_rate - upkeep_rate)
+
+    gain = int(math.floor(net_rate * dt_hours))
     if gain > 0:
         factory.stored_coins = int(factory.stored_coins or 0) + gain
+
     factory.last_collected_at = now
+
+
 def country_polygon_ring(country: Country):
     """
     Backward-compatible for old code (api_factories.py etc).
@@ -159,15 +327,16 @@ def country_polygon_ring(country: Country):
     if len(rings) == 1:
         return rings[0]
 
-    # choose biggest ring by bbox area (fast heuristic)
     def bbox_area(r):
         xs = [p[0] for p in r[:-1]]
         ys = [p[1] for p in r[:-1]]
         return (max(xs) - min(xs)) * (max(ys) - min(ys))
 
     return max(rings, key=bbox_area)
-    # ----------------------------
-# Market pricing (simple/stable)
+
+
+# ----------------------------
+# Market pricing (simple/stable, harder)
 # ----------------------------
 RESOURCE_BASE_PRICES = {
     "oil": 28,
@@ -186,6 +355,10 @@ RESOURCE_BASE_PRICES = {
     "geo": 20,
 }
 
+# Bigger spread => less easy arbitrage / easier money loops
+MARKET_SELL_MULT = float(os.getenv("MARKET_SELL_MULT", "0.78"))  # was 0.85
+MARKET_BUY_MULT = float(os.getenv("MARKET_BUY_MULT", "1.22"))    # was 1.15
+
 def market_price(resource: str, side: str) -> int:
     """
     side: 'buy' or 'sell'
@@ -196,9 +369,8 @@ def market_price(resource: str, side: str) -> int:
         return 0
 
     if side == "sell":
-        return int(round(base * 0.85))  # country sells cheaper
+        return int(round(base * float(MARKET_SELL_MULT)))
     if side == "buy":
-        return int(round(base * 1.15))  # country buys more expensive
+        return int(round(base * float(MARKET_BUY_MULT)))
 
     return base
-
