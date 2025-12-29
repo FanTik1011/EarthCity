@@ -527,3 +527,10 @@ body {
 .mkPage {
   overflow: visible !important;
 }
+/* --- Auto-harvest UX tweaks --- */
+#btnHarvest { display:none !important; } /* якщо кнопка випадково залишилась у шаблоні */
+
+.mkChip--auto{
+  border-color: rgba(255,255,255,.18);
+  background: rgba(255,255,255,.06);
+}

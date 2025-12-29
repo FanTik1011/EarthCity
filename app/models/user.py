@@ -24,3 +24,6 @@ class User(db.Model, UserMixin):
     blocked_at = db.Column(db.DateTime, nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    google_id = db.Column(db.String(255), unique=True, nullable=True)
+    password_hash = db.Column(db.String(255), nullable=True)
+

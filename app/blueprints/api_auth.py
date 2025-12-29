@@ -129,3 +129,86 @@ def api_resend_confirmation():
 
     result = send_confirmation_email(current_user)
     return jsonify(ok=True, sent=result["sent"], dev_link=result["dev_link"], mail_error=result["error"])
+import os
+import requests
+from flask import redirect, current_app, url_for
+
+@bp_api_auth.get("/api/auth/google/start")
+def google_start():
+    client_id = os.getenv("GOOGLE_CLIENT_ID")
+    redirect_uri = current_app.config["PUBLIC_BASE_URL"] + "/api/auth/google/callback"
+
+    scope = "openid email profile"
+    url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={client_id}"
+        f"&redirect_uri={redirect_uri}"
+        f"&response_type=code"
+        f"&scope={scope}"
+    )
+    return redirect(url)
+
+
+@bp_api_auth.get("/api/auth/google/callback")
+def google_callback():
+    code = request.args.get("code")
+    if not code:
+        return redirect("/")
+
+    # 1. exchange code → token
+    token_res = requests.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+            "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+            "code": code,
+            "grant_type": "authorization_code",
+            "redirect_uri": current_app.config["PUBLIC_BASE_URL"] + "/api/auth/google/callback",
+        },
+        timeout=10
+    ).json()
+
+    access_token = token_res.get("access_token")
+    if not access_token:
+        return redirect("/")
+
+    # 2. get user info
+    info = requests.get(
+        "https://www.googleapis.com/oauth2/v3/userinfo",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=10
+    ).json()
+
+    email = info.get("email")
+    google_id = info.get("sub")
+    name = info.get("name") or email.split("@")[0]
+
+    if not email or not google_id:
+        return redirect("/")
+
+    # 3. find or create user
+    user = User.query.filter(
+        (User.google_id == google_id) | (User.email == email)
+    ).first()
+
+    if not user:
+        user = User(
+            username=name,
+            email=email,
+            google_id=google_id,
+            is_confirmed=True,          # Google email = confirmed
+            starter_granted=True
+        )
+        db.session.add(user)
+        db.session.commit()
+    else:
+        if not user.google_id:
+            user.google_id = google_id
+            user.is_confirmed = True
+            db.session.commit()
+
+    login_user(user)
+    auto_promote_admin(user)
+
+    return redirect("/")
+

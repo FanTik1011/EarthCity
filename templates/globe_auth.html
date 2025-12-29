@@ -196,6 +196,9 @@
 
         <div class="tabs">
           <button type="button" class="tab active" id="tabLogin">Login</button>
+          <button class="btn-ghost" onclick="window.location='/api/auth/google/start'">
+            🔐 Continue with Google
+          </button>
           <button type="button" class="tab" id="tabRegister">Register</button>
         </div>
 
@@ -211,6 +214,7 @@
             <input id="loginPassword" type="password" placeholder="******" autocomplete="current-password">
           </div>
           <button type="button" class="btn-primary" id="btnLogin">🚀 Увійти</button>
+          
         </div>
 
         <div id="panelRegister" style="display:none;">
