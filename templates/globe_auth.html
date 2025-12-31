@@ -22,68 +22,88 @@
     <!-- ambience -->
     <div class="stars" id="stars"></div>
     <div class="clouds" id="clouds"></div>
+    <div class="vignette"></div>
+    <div class="grain"></div>
 
     <!-- TOPBAR -->
-    <header class="topbar">
-      <div class="topbar-blur"></div>
-
-      <div class="brand">
-        <div class="brand-logo">
-          <div class="brand-orb"></div>
-          <div class="brand-mark">EC</div>
-        </div>
-        <div class="brand-text">
-          <div class="brand-line">
-            <div class="brand-title">EarthCity</div>
-            <span class="beta-badge" title="Beta build">BETA</span>
+    <header class="topbar" role="banner">
+      <div class="topbar-backdrop glass"></div>
+      <div class="topbar-row">
+        <div class="brand" aria-label="EarthCity">
+          <div class="brand-logo" aria-hidden="true">
+            <div class="brand-orb"></div>
+            <div class="brand-mark">EC</div>
           </div>
-          <div class="brand-sub" id="subtitle">MMO world • Countries • Resources • Factories</div>
-        </div>
-      </div>
-
-      <div class="top-right">
-        <div class="stat-chip">
-          <div class="stat-dot"></div>
-          <div class="stat-label">Zoom</div>
-          <div class="stat-value" id="zoom">—</div>
+          <div class="brand-text">
+            <div class="brand-line">
+              <div class="brand-title">EarthCity</div>
+              <span class="beta-badge" title="Beta build">BETA</span>
+            </div>
+            <div class="brand-sub">Forge nations • harvest resources • build factories</div>
+          </div>
         </div>
 
-        <div class="stat-chip">
-          <div class="stat-ico">💰</div>
-          <div class="stat-label">Coins</div>
-          <div class="stat-value" id="topCoins">—</div>
-        </div>
+        <div class="top-right">
+          <div class="stat-chip" title="Current zoom">
+            <div class="stat-dot" aria-hidden="true"></div>
+            <div class="stat-label">Zoom</div>
+            <div class="stat-value" id="zoom">—</div>
+          </div>
 
-        <div class="top-actions">
-          <button class="btn-ghost" id="btnOpenFactories" type="button">🏭 Factories</button>
-          <button class="btn-ghost" id="btnExpandCountry" type="button">🟣 Expand</button>
-          <button class="btn-ghost" id="btnMarket" type="button">🛒 Market</button>
-          <button class="btn-ghost" id="btnLogout" type="button" style="display:none;">Logout</button>
+          <div class="stat-chip" title="Your coins">
+            <div class="stat-ico" aria-hidden="true">💰</div>
+            <div class="stat-label">Vault</div>
+            <div class="stat-value" id="topCoins">—</div>
+          </div>
+
+          <div class="top-actions">
+            <!-- IDs unchanged (logic safe) -->
+            <button class="btn-ghost" id="btnOpenFactories" type="button" title="Open factory bay">
+              🏭 Factory Bay
+            </button>
+
+            <button class="btn-ghost" id="btnExpandCountry" type="button" title="Expand borders">
+              🟣 Expand Realm
+            </button>
+
+            <button class="btn-ghost" id="btnMarket" type="button" title="Open exchange">
+              🛒 Exchange
+            </button>
+
+            <button class="btn-ghost" id="btnLogout" type="button" style="display:none;">
+              Logout
+            </button>
+          </div>
         </div>
       </div>
     </header>
 
-    <!-- BUILD BAR (create country) -->
+    <!-- BUILD BAR -->
     <div class="buildbar glass" id="buildbar">
       <div class="buildbar-left">
         <div class="buildbar-title">
-          <span class="buildbar-ico">🏳️</span>
-          <span>Create your first country</span>
+          <span class="buildbar-ico" aria-hidden="true">🏳️</span>
+          <span>Claim your first realm</span>
+          <span class="pill-beta">Beta</span>
         </div>
-        <div class="buildbar-sub">Place points on the map → finish → name & color (Beta)</div>
+        <div class="buildbar-sub">
+          Tap the globe to place points → finish → name it and choose a color.
+        </div>
       </div>
 
       <div class="buildbar-right">
-        <button class="btn-primary" id="btnCreateCountry" type="button">Create Country</button>
+        <button class="btn-primary" id="btnCreateCountry" type="button">
+          ✨ Claim Realm
+        </button>
 
         <div class="build-actions" id="buildActions" style="display:none;">
-          <button class="btn-ghost" id="btnUndo" type="button">↩ Undo</button>
-          <button class="btn-ghost" id="btnCancel" type="button">✖ Cancel</button>
-          <button class="btn-primary" id="btnFinish" type="button">✅ Finish</button>
+          <button class="btn-ghost" id="btnUndo" type="button">↩ Rewind</button>
+          <button class="btn-ghost" id="btnCancel" type="button">✖ Abort</button>
+          <button class="btn-primary" id="btnFinish" type="button">✅ Seal Borders</button>
         </div>
 
         <div class="buildbar-note" id="buildbarNote" style="display:none;">
-          You already have a country. (Beta restriction)
+          Realm already claimed on this account. (Beta rule)
         </div>
       </div>
     </div>
@@ -92,9 +112,9 @@
     <aside class="panel glass panel-left" id="factorybar" aria-hidden="true">
       <div class="panel-head">
         <div class="panel-title">
-          <div class="panel-badge">🏭</div>
+          <div class="panel-badge" aria-hidden="true">🏭</div>
           <div>
-            <div class="panel-name">Factories</div>
+            <div class="panel-name">Factory Bay</div>
             <div class="panel-sub" id="fbSub">Build mode: off</div>
           </div>
         </div>
@@ -104,14 +124,14 @@
       <div class="panel-body">
         <div class="panel-row">
           <div class="chip" id="myCoins">💰 —</div>
-          <button class="btn-ghost" id="btnFactoryMode" type="button">🧱 Build</button>
+          <button class="btn-ghost" id="btnFactoryMode" type="button">🧱 Deploy Mode</button>
         </div>
 
         <div class="msg" id="fbMsg" style="display:none;"></div>
 
         <div class="panel-section">
           <div class="section-head">
-            <div class="section-title">Blueprints</div>
+            <div class="section-title">Blueprint Archive</div>
             <div class="section-pill">Beta</div>
           </div>
           <div class="list" id="fbBlueprints"></div>
@@ -119,25 +139,25 @@
 
         <div class="panel-section">
           <div class="section-head">
-            <div class="section-title">Selected</div>
+            <div class="section-title">Active Blueprint</div>
           </div>
           <div class="selected" id="fbSelected">
-            <div class="muted">Select a blueprint to place it on the map.</div>
+            <div class="muted">Pick a blueprint — then click inside your realm to deploy.</div>
           </div>
 
           <div class="panel-row" style="margin-top:12px;">
             <button class="btn-ghost" id="fbClose2" type="button">✖ Close</button>
-            <button class="btn-primary" id="btnTipFactory" type="button" style="display:none;">ℹ️ How it works</button>
+            <button class="btn-primary" id="btnTipFactory" type="button" style="display:none;">ℹ️ Guide</button>
           </div>
 
           <div class="tip" id="fbTip" style="display:none;">
-            <b>How:</b> choose blueprint → click inside your country → server checks nearby resources → builds factory.
+            <b>How it works:</b> select blueprint → click inside your realm → server verifies → factory appears.
           </div>
         </div>
 
         <div class="panel-section">
           <div class="section-head">
-            <div class="section-title">My factories</div>
+            <div class="section-title">My Factories</div>
           </div>
           <div class="list" id="fbMyFactories">
             <div class="muted">Login to see your factories.</div>
@@ -150,10 +170,10 @@
     <aside class="panel glass panel-right" id="countryPanel" aria-hidden="true">
       <div class="panel-head">
         <div class="panel-title">
-          <div class="color-dot" id="cpColor"></div>
+          <div class="color-dot" id="cpColor" aria-hidden="true"></div>
           <div>
             <div class="panel-name" id="cpName">—</div>
-            <div class="panel-sub" id="cpSub">Click a country to view details</div>
+            <div class="panel-sub" id="cpSub">Select a realm to see details</div>
           </div>
         </div>
         <button class="btn-ghost panel-close" id="cpClose" type="button" title="Close">✖</button>
@@ -162,7 +182,7 @@
       <div class="panel-body">
         <div class="grid">
           <div class="metric">
-            <div class="k">Area</div>
+            <div class="k">Territory</div>
             <div class="v" id="cpArea">—</div>
           </div>
           <div class="metric">
@@ -170,11 +190,11 @@
             <div class="v" id="cpFactories">—</div>
           </div>
           <div class="metric">
-            <div class="k">Owner</div>
+            <div class="k">Ruler</div>
             <div class="v" id="cpOwner">—</div>
           </div>
           <div class="metric">
-            <div class="k">Selected</div>
+            <div class="k">Realm ID</div>
             <div class="v" id="cpId">—</div>
           </div>
         </div>
@@ -183,61 +203,59 @@
 
         <div class="panel-section">
           <div class="section-head">
-            <div class="section-title">Actions</div>
+            <div class="section-title">Quick Actions</div>
           </div>
+
           <div class="panel-row">
-            <button class="btn-ghost" id="cpFly" type="button">🌍 Fly to</button>
-            <button class="btn-ghost" id="cpOpenFactories" type="button">🏭 Factories</button>
+            <button class="btn-ghost" id="cpFly" type="button">🌍 Focus</button>
+            <button class="btn-ghost" id="cpOpenFactories" type="button">🏭 Open Factory Bay</button>
           </div>
 
           <div class="tip" id="cpHint">
-            <b>Beta note:</b> balance, costs and visuals may change.
+            <b>Beta:</b> gameplay, costs and visuals may change at any time.
           </div>
         </div>
       </div>
     </aside>
 
-    <!-- HUD (bottom-left) -->
-    <div class="hud">
+    <!-- HUD (never blocks clicks except the card) -->
+    <div class="hud" aria-hidden="false">
       <div class="hud-card glass">
         <div class="hud-row">
           <div class="hud-block">
-            <div class="k">Coords</div>
+            <div class="k">Coordinates</div>
             <div class="v mono" id="coords">—</div>
           </div>
           <div class="hud-block right">
-            <div class="k">User</div>
+            <div class="k">Pilot</div>
             <div class="v" id="userLabel">Guest</div>
           </div>
         </div>
         <div class="divider"></div>
         <div class="hud-hint">
-          Drag — rotate • Wheel/Pinch — zoom • Shift+Drag — pitch<br>
-          <span class="muted2">Create Country: click points → Finish</span>
-          <div class="hud-beta">EarthCity Beta — features & balance may change.</div>
+          Drag — rotate • Wheel/Pinch — zoom • Shift+Drag — tilt<br>
+          <span class="muted2">Claim Realm: click points → Seal Borders</span>
+          <div class="hud-beta">EarthCity Beta — early access build.</div>
         </div>
       </div>
     </div>
 
-    <div class="vignette"></div>
-    <div class="grain"></div>
-
     <!-- AUTH OVERLAY -->
     <div class="overlay" id="overlay" aria-hidden="true">
-      <div class="auth glass">
+      <div class="auth glass" role="dialog" aria-modal="true" aria-label="Authentication">
         <div class="auth-hero">
           <div class="auth-badge">
             <span class="beta-badge sm">BETA</span>
             <span class="auth-badge-text">Early access build</span>
           </div>
 
-          <div class="auth-title">Welcome to EarthCity</div>
+          <div class="auth-title">Enter the Planetary Sim</div>
           <div class="auth-sub">
-            Build countries, place factories and trade resources.
-            <span class="muted2">Email confirmation required.</span>
+            Claim realms, deploy factories and trade on the Exchange.
+            <span class="muted2">Confirm email to unlock gameplay.</span>
           </div>
 
-          <div class="auth-art">
+          <div class="auth-art" aria-hidden="true">
             <div class="ring r1"></div>
             <div class="ring r2"></div>
             <div class="ring r3"></div>
@@ -250,11 +268,13 @@
 
         <div class="auth-body">
           <div class="tabs">
-            <button type="button" class="tab active" id="tabLogin">Login</button>
+            <button type="button" class="tab active" id="tabLogin">Sign in</button>
+
             <button class="btn-google" type="button" onclick="window.location='/api/auth/google/start'">
-              <span class="g">G</span> Continue with Google
+              <span class="g">G</span> Warp in with Google
             </button>
-            <button type="button" class="tab" id="tabRegister">Register</button>
+
+            <button type="button" class="tab" id="tabRegister">Join</button>
           </div>
 
           <div class="msg" id="msg" style="display:none;"></div>
@@ -269,10 +289,10 @@
               <label>Password</label>
               <input id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password">
             </div>
-            <button type="button" class="btn-primary big" id="btnLogin">🚀 Login</button>
+            <button type="button" class="btn-primary big" id="btnLogin">🚀 Launch Session</button>
 
             <div class="auth-foot">
-              By using EarthCity you accept that this is a <b>Beta version</b>.
+              By continuing, you acknowledge this is a <b>Beta version</b>.
             </div>
           </div>
 
@@ -290,23 +310,23 @@
               <label>Password</label>
               <input id="regPassword" type="password" placeholder="min 6 characters" autocomplete="new-password">
             </div>
-            <button type="button" class="btn-primary big" id="btnRegister">✅ Create account</button>
+            <button type="button" class="btn-primary big" id="btnRegister">✅ Create Pilot ID</button>
 
             <div class="auth-foot">
-              After registration, confirm your email to unlock gameplay.
+              After joining, confirm email to unlock your first realm.
             </div>
           </div>
 
           <!-- unconfirmed -->
           <div id="panelUnconfirmed" style="display:none;">
             <div class="warn">
-              Your email is not confirmed yet. Check Inbox/Spam.
+              Email not confirmed yet. Check Inbox/Spam.
             </div>
-            <button type="button" class="btn-primary big" id="btnResend">📩 Resend confirmation</button>
+            <button type="button" class="btn-primary big" id="btnResend">📩 Resend Beacon</button>
             <div class="devlink" id="devLink" style="display:none;"></div>
 
             <div class="auth-foot">
-              Still not receiving? Try another email or check spam folder.
+              Still nothing? Try another email or check spam folder.
             </div>
           </div>
         </div>
@@ -315,40 +335,40 @@
 
     <!-- SAVE COUNTRY OVERLAY -->
     <div class="overlay overlay-strong" id="countryOverlay" style="display:none;">
-      <div class="modal glass">
+      <div class="modal glass" role="dialog" aria-modal="true" aria-label="Claim realm">
         <div class="modal-head">
-          <div class="modal-title">Create country</div>
-          <div class="modal-sub">Name + color → save it into the MMO world (Beta)</div>
+          <div class="modal-title">Claim your realm</div>
+          <div class="modal-sub">Name + color → save into the MMO world (Beta)</div>
         </div>
 
         <div class="field">
-          <label>Name</label>
+          <label>Realm name</label>
           <input id="countryName" placeholder="Example: VolodyaLand">
         </div>
 
         <div class="field">
-          <label>Color</label>
+          <label>Realm color</label>
           <input id="countryColor" type="color" value="#7c3aed" style="height:44px;">
         </div>
 
         <div class="country-stats" id="countryStats">
           <div class="stat">
-            <div class="k">Area</div>
+            <div class="k">Territory</div>
             <div class="v" id="draftArea">—</div>
           </div>
           <div class="stat">
-            <div class="k">Cost</div>
+            <div class="k">Claim cost</div>
             <div class="v" id="draftCost">—</div>
           </div>
           <div class="stat">
-            <div class="k">Your coins</div>
+            <div class="k">Your vault</div>
             <div class="v" id="myCoinsModal">—</div>
           </div>
         </div>
 
         <div class="msg" id="countryMsg" style="display:none;"></div>
 
-        <button type="button" class="btn-primary big" id="btnSaveCountry">💾 Save</button>
+        <button type="button" class="btn-primary big" id="btnSaveCountry">💾 Finalize Claim</button>
         <button type="button" class="btn-ghost" id="btnCloseCountry">Close</button>
       </div>
     </div>
@@ -365,7 +385,6 @@
       try {
         const res = await fetch("/api/me", { credentials: "same-origin" });
         const me = await res.json();
-
         const coins = (me && me.authenticated) ? (me.coins || 0) : 0;
         const pretty = coins.toLocaleString("en-US") + " EC";
 
@@ -377,7 +396,6 @@
         if (myCoins) myCoins.textContent = "💰 " + pretty;
         if (myCoinsModal) myCoinsModal.textContent = pretty;
         if (topCoins) topCoins.textContent = pretty;
-
         if (userLabel) userLabel.textContent = me.authenticated ? (me.username + " • " + pretty) : "Guest";
       } catch (e) {}
     }
@@ -386,6 +404,5 @@
       setInterval(updateCoins, 10000);
     });
   </script>
-
 </body>
 </html>
