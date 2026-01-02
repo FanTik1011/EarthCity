@@ -1,15 +1,17 @@
 <!doctype html>
-<html lang="uk">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>EarthCity — Market</title>
+  <title>EarthCity — NPC Market (Beta)</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
 
+  <!-- Your global styles -->
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <!-- Market styles -->
   <link rel="stylesheet" href="{{ url_for('static', filename='css/market.css') }}">
 </head>
 
@@ -18,35 +20,50 @@
   <header class="mkHeader">
     <div class="mkHeader__inner">
       <div class="mkBrand">
-        <div class="mkLogo">EC</div>
+        <div class="mkLogo" aria-hidden="true">EC</div>
         <div class="mkBrand__text">
-          <div class="mkTitle">NPC Market</div>
-          <div class="mkSub" id="countryLine">Країна: —</div>
+          <div class="mkTitle">
+            NPC Market <span class="mkBeta">BETA</span>
+          </div>
+          <div class="mkSub" id="countryLine">Country: —</div>
         </div>
       </div>
 
       <div class="mkHeader__right">
         <div class="mkPills">
-          <div class="mkPill" id="pillUser">👤 —</div>
-          <div class="mkPill" id="pillCoins">💰 —</div>
+          <div class="mkPill" id="pillUser" title="Signed-in user">👤 —</div>
+          <div class="mkPill" id="pillCoins" title="Your coins">💰 —</div>
+          <div class="mkPill mkPill--soft" id="pillHint" title="Hint">✨ Harvest → Stock → Sell / Buy</div>
         </div>
 
         <div class="mkHeader__btns">
-          <a class="mkBtn mkBtn--ghost" href="/" title="Повернутись на карту">⬅️ На карту</a>
-          <button class="mkBtn mkBtn--primary" id="btnHarvest" title="Зібрати ресурси в межах країни">⛏️ HARVEST</button>
-          <button class="mkBtn mkBtn--ghost" id="btnHelp" title="Як працює маркет?">❓ Help</button>
+          <a class="mkBtn mkBtn--ghost" href="/" title="Back to the map">⬅️ Map</a>
+
+          <button class="mkBtn mkBtn--primary" id="btnHarvest" title="Collect resources from nodes inside your country">
+            ⛏️ Harvest
+          </button>
+
+          <button class="mkBtn mkBtn--ghost" id="btnHelp" title="How it works">❓ Help</button>
         </div>
       </div>
     </div>
 
     <div class="mkTabs">
-      <button class="mkMiniBtn" id="btnGoInv">📦 Склад</button>
-      <button class="mkMiniBtn" id="btnGoMarket">💱 Маркет</button>
+      <div class="mkTabs__left">
+        <button class="mkMiniBtn" id="btnGoInv" title="Jump to your stock">📦 Stock</button>
+        <button class="mkMiniBtn" id="btnGoMarket" title="Jump to NPC market">🏦 NPC Market</button>
+      </div>
+
+      <div class="mkTabs__right">
+        <span class="mkChip mkChip--live" title="Live data">● Live</span>
+        <span class="mkChip" title="Instant sell to NPC">Sell = instant</span>
+        <span class="mkChip" title="Instant buy from NPC">Buy = instant</span>
+      </div>
     </div>
   </header>
 
   <!-- Toast -->
-  <div class="mkToastWrap">
+  <div class="mkToastWrap" aria-live="polite" aria-atomic="true">
     <div id="msg" class="mkToast"></div>
   </div>
 
@@ -54,49 +71,98 @@
     <!-- Hero -->
     <section class="mkHero">
       <div class="mkHero__left">
-        <div class="mkHero__title">Склад країни → продаж/купівля у NPC</div>
+        <div class="mkHero__kicker">Simple flow</div>
+        <div class="mkHero__title">Harvest → Country Stock → Trade with NPC</div>
         <div class="mkHero__desc">
-          Натисни <span class="mkBadge">HARVEST</span>, щоб перенести ресурси з нодів у <b>склад</b>.
-          Далі продавай зі <b>стікерів</b> або купуй у <b>NPC</b>.
+          This page lets you manage your country resources and trade with the system NPC market.
+          Everything is instant: <b>Sell</b> converts stock into coins, <b>Buy</b> converts coins into stock.
+        </div>
+
+        <div class="mkStepsRow" role="list">
+          <div class="mkStepCard" role="listitem">
+            <div class="mkStepCard__i" aria-hidden="true">1</div>
+            <div class="mkStepCard__t">
+              <b>Harvest</b>
+              <div class="mkStepCard__s">Collect nodes inside your borders into stock.</div>
+            </div>
+          </div>
+
+          <div class="mkStepCard" role="listitem">
+            <div class="mkStepCard__i" aria-hidden="true">2</div>
+            <div class="mkStepCard__t">
+              <b>Sell</b>
+              <div class="mkStepCard__s">Choose amount (Max / All) and sell instantly.</div>
+            </div>
+          </div>
+
+          <div class="mkStepCard" role="listitem">
+            <div class="mkStepCard__i" aria-hidden="true">3</div>
+            <div class="mkStepCard__t">
+              <b>Buy</b>
+              <div class="mkStepCard__s">Pick resource, amount, confirm, done.</div>
+            </div>
+          </div>
         </div>
 
         <div class="mkTips">
-          <div class="mkTip"><div class="mkTip__i">📦</div><div><b>Стікери</b> показують що є на складі.</div></div>
-          <div class="mkTip"><div class="mkTip__i">💸</div><div><b>Sell</b> = миттєвий продаж у NPC по ціні Sell.</div></div>
-          <div class="mkTip"><div class="mkTip__i">🛒</div><div><b>Buy</b> = купівля у NPC по ціні Buy.</div></div>
+          <div class="mkTip">
+            <div class="mkTip__i" aria-hidden="true">📦</div>
+            <div><b>Stock</b> shows what your country currently owns.</div>
+          </div>
+          <div class="mkTip">
+            <div class="mkTip__i" aria-hidden="true">💸</div>
+            <div><b>Sell</b> uses the NPC sell price (instant).</div>
+          </div>
+          <div class="mkTip">
+            <div class="mkTip__i" aria-hidden="true">🛡️</div>
+            <div>Every trade asks for <b>confirmation</b> to avoid mistakes.</div>
+          </div>
         </div>
       </div>
 
       <div class="mkHero__right">
         <div class="mkCard mkCard--glow">
           <div class="mkCard__title">🚀 Quick actions</div>
-          <div class="mkCard__sub">Зручно перескакувати по сторінці</div>
+          <div class="mkCard__sub">Jump around the page fast</div>
 
           <div class="mkQuick">
-            <button class="mkBtn mkBtn--primary mkBtn--block" id="btnScrollInv">📦 До складу</button>
-            <button class="mkBtn mkBtn--ghost mkBtn--block" id="btnScrollMarket">💱 До маркету</button>
+            <button class="mkBtn mkBtn--primary mkBtn--block" id="btnScrollInv">📦 Go to Stock</button>
+            <button class="mkBtn mkBtn--ghost mkBtn--block" id="btnScrollMarket">🏦 Go to NPC Market</button>
           </div>
 
           <div class="mkDivider"></div>
 
           <div class="mkNote">
-            Якщо інвентар пустий — натисни <b>HARVEST</b>.
-            Якщо HARVEST нічого не дав — ноди не в межах країни або їх мало.
+            If stock is empty — press <b>Harvest</b>.
+            If Harvest gives nothing — your resource nodes may be outside the border (or you have none).
           </div>
         </div>
       </div>
     </section>
 
-    <!-- Inventory -->
+    <!-- Inventory / Stock -->
     <section class="mkSection" id="secInventory">
       <div class="mkSection__head">
         <div>
-          <div class="mkSection__title">📦 Склад країни</div>
-          <div class="mkSection__sub">Sell зі стікера → підтвердження → продаж.</div>
+          <div class="mkSection__title">📦 Country Stock</div>
+          <div class="mkSection__sub">Search, sort, then sell using Max/All for speed.</div>
         </div>
+
         <div class="mkSection__right">
-          <span class="mkChip mkChip--live">● Live</span>
-          <span class="mkChip">Sell = NPC</span>
+          <div class="mkControls">
+            <div class="mkCtrl">
+              <div class="mkCtrl__label">Search</div>
+              <input id="invSearch" class="mkInput" type="text" placeholder="Type: iron, oil, gold…" autocomplete="off">
+            </div>
+            <div class="mkCtrl mkCtrl--tight">
+              <div class="mkCtrl__label">Sort</div>
+              <select id="invSort" class="mkSelect">
+                <option value="have_desc">Most stock</option>
+                <option value="value_desc">Highest value</option>
+                <option value="name_asc">Name A→Z</option>
+              </select>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -108,7 +174,9 @@
       <div class="mkPanel active">
         <div class="mkPanel__head">
           <div class="mkPanel__title">🏦 NPC Market</div>
-          <div class="mkPanel__sub">Купуй ресурси в систему. Buy відкриває підтвердження.</div>
+          <div class="mkPanel__sub">
+            Buy resources from the system. You’ll see price and affordability before confirming.
+          </div>
         </div>
 
         <div class="mkPanel__body">
@@ -120,7 +188,12 @@
 
             <div class="mkField mkField--tight">
               <div class="mkLabel">Amount</div>
-              <input id="buyAmt" class="mkInput" type="number" min="0" step="1" value="10">
+              <input id="buyAmt" class="mkInput" type="number" min="1" step="1" value="10">
+              <div class="mkSmallRow">
+                <button class="mkPillBtn" id="buyMinus" type="button" title="Decrease">−</button>
+                <button class="mkPillBtn" id="buyPlus" type="button" title="Increase">+</button>
+                <button class="mkPillBtn" id="buyMax" type="button" title="Max you can afford">Max</button>
+              </div>
             </div>
 
             <div class="mkField mkField--tight">
@@ -130,35 +203,69 @@
           </div>
 
           <div class="mkInfoBox" id="buyInfo">Price: —</div>
+          <div class="mkHintLine" id="buyHint">Tip: Use Max to auto-fill the biggest affordable amount.</div>
         </div>
       </div>
     </section>
+
+    <footer class="mkFooter">
+      <div class="mkFooter__inner">
+        <div class="mkFooter__l">
+          <div class="mkFooter__brand">EarthCity</div>
+          <div class="mkFooter__sub">NPC Market (Beta) • UI-only improvements • No backend changes</div>
+        </div>
+        <div class="mkFooter__r">
+          <button class="mkMiniBtn" id="fabTopInline" type="button">⬆️ Top</button>
+        </div>
+      </div>
+    </footer>
 
     <div class="mkBottomSpace"></div>
   </main>
 
   <!-- Floating nav -->
-  <div class="mkFloat">
-    <button class="mkFloatBtn" id="fabTop" title="Вгору">⬆️</button>
-    <button class="mkFloatBtn" id="fabInv" title="Склад">📦</button>
-    <button class="mkFloatBtn" id="fabMk" title="Маркет">💱</button>
+  <div class="mkFloat" aria-label="Quick navigation">
+    <button class="mkFloatBtn" id="fabTop" title="Scroll to top">⬆️</button>
+    <button class="mkFloatBtn" id="fabInv" title="Stock">📦</button>
+    <button class="mkFloatBtn" id="fabMk" title="NPC Market">🏦</button>
   </div>
 
   <!-- Help modal -->
-  <div class="mkModal" id="helpModal" aria-hidden="true">
+  <div class="mkModal" id="helpModal" aria-hidden="true" role="dialog" aria-modal="true">
     <div class="mkModal__backdrop" data-close="1"></div>
     <div class="mkModal__card">
       <div class="mkModal__head">
-        <div class="mkModal__title">❓ Як працює NPC Market</div>
-        <button class="mkModal__x" data-close="1">✕</button>
+        <div class="mkModal__title">❓ How the NPC Market works</div>
+        <button class="mkModal__x" data-close="1" aria-label="Close">✕</button>
       </div>
+
       <div class="mkModal__body">
         <div class="mkSteps">
-          <div class="mkStep"><div class="mkStep__n">1</div><div class="mkStep__t"><b>HARVEST</b> → ресурси в склад.</div></div>
-          <div class="mkStep"><div class="mkStep__n">2</div><div class="mkStep__t"><b>Sell</b> зі стікера → монети +.</div></div>
-          <div class="mkStep"><div class="mkStep__n">3</div><div class="mkStep__t"><b>Buy</b> → ресурс +, монети -.</div></div>
+          <div class="mkStep">
+            <div class="mkStep__n">1</div>
+            <div class="mkStep__t">
+              Press <b>Harvest</b> to move resources from nodes inside your borders into <b>Stock</b>.
+            </div>
+          </div>
+          <div class="mkStep">
+            <div class="mkStep__n">2</div>
+            <div class="mkStep__t">
+              In <b>Stock</b>, choose an amount and press <b>Sell</b> to instantly get coins.
+            </div>
+          </div>
+          <div class="mkStep">
+            <div class="mkStep__n">3</div>
+            <div class="mkStep__t">
+              In <b>NPC Market</b>, pick a resource and amount, press <b>Buy</b>, confirm — done.
+            </div>
+          </div>
+        </div>
+
+        <div class="mkNote" style="margin-top:12px;">
+          If Harvest returns “0 nodes inside”, your resource nodes are outside the country border (or you don’t have any).
         </div>
       </div>
+
       <div class="mkModal__foot">
         <button class="mkBtn mkBtn--ghost" data-close="1">OK</button>
       </div>
@@ -166,23 +273,26 @@
   </div>
 
   <!-- Confirm modal (Sell/Buy) -->
-  <div class="mkModal" id="confirmModal" aria-hidden="true">
+  <div class="mkModal" id="confirmModal" aria-hidden="true" role="dialog" aria-modal="true">
     <div class="mkModal__backdrop" data-close="1"></div>
     <div class="mkModal__card">
       <div class="mkModal__head">
         <div class="mkModal__title" id="confirmTitle">Confirm</div>
-        <button class="mkModal__x" data-close="1">✕</button>
+        <button class="mkModal__x" data-close="1" aria-label="Close">✕</button>
       </div>
+
       <div class="mkModal__body">
         <div class="mkConfirmBox">
           <div class="mkConfirmRow"><div class="mkConfirmK">Action</div><div class="mkConfirmV" id="confirmAction">—</div></div>
           <div class="mkConfirmRow"><div class="mkConfirmK">Resource</div><div class="mkConfirmV" id="confirmRes">—</div></div>
           <div class="mkConfirmRow"><div class="mkConfirmK">Amount</div><div class="mkConfirmV" id="confirmAmt">—</div></div>
-          <div class="mkConfirmRow"><div class="mkConfirmK">Price</div><div class="mkConfirmV" id="confirmPrice">—</div></div>
+          <div class="mkConfirmRow"><div class="mkConfirmK">Unit price</div><div class="mkConfirmV" id="confirmPrice">—</div></div>
           <div class="mkConfirmRow"><div class="mkConfirmK">Total</div><div class="mkConfirmV" id="confirmTotal">—</div></div>
         </div>
-        <div class="mkNote" id="confirmHint">—</div>
+
+        <div class="mkNote" id="confirmHint" style="margin-top:10px;">—</div>
       </div>
+
       <div class="mkModal__foot">
         <button class="mkBtn mkBtn--ghost" data-close="1">Cancel</button>
         <button class="mkBtn mkBtn--primary" id="confirmDo">Confirm</button>

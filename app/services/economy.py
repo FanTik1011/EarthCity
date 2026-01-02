@@ -23,30 +23,24 @@ FACTORY_MAX_PER_COUNTRY = int(os.getenv("FACTORY_MAX_PER_COUNTRY", "40"))
 FACTORY_ACCUM_CAP_HOURS = int(os.getenv("FACTORY_ACCUM_CAP_HOURS", "72"))
 FACTORY_PICK_RADIUS_KM = int(os.getenv("FACTORY_PICK_RADIUS_KM", "120"))
 
-# ----------------------------
-# ✅ Harder economy knobs (NO DB changes)
-# ----------------------------
-# >1 makes economy harder overall
+
 ECONOMY_DIFFICULTY = float(os.getenv("ECONOMY_DIFFICULTY", "1.25"))
 
-# global income multiplier (lower = less money)
+
 FACTORY_GLOBAL_MULT = float(os.getenv("FACTORY_GLOBAL_MULT", "0.82"))
 
-# level scaling step (was ~0.22, now smaller)
+
 FACTORY_LVL_STEP = float(os.getenv("FACTORY_LVL_STEP", "0.14"))
 
-# upkeep per hour: build_cost * rate (subtracted from income)
+
 FACTORY_UPKEEP_RATE = float(os.getenv("FACTORY_UPKEEP_RATE", "0.06"))
 
-# softcap: first N factories in country have no penalty, then diminishing returns
 FACTORY_SOFTCAP_FREE = int(os.getenv("FACTORY_SOFTCAP_FREE", "6"))
 FACTORY_SOFTCAP_PENALTY = float(os.getenv("FACTORY_SOFTCAP_PENALTY", "0.07"))
 FACTORY_MIN_MULT = float(os.getenv("FACTORY_MIN_MULT", "0.25"))
 
-# ----------------------------
-# Factory blueprints
-# (kept compatible; you can tweak build_cost/base_income if you want)
-# ----------------------------
+
+
 FACTORY_BLUEPRINTS = {
     "steel_mill": {
         "name": "Steel Mill",
