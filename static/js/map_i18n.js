@@ -59,6 +59,91 @@
 
   // Topbar factories button
   const btnOpenFactories = $("btnOpenFactories");
+  // =========================================================
+  // i18n (UA / EN) — no backend changes
+  // =========================================================
+  const I18N = {
+    en: {
+      km2: "km²",
+      msg_points_land: "🔴 Points must be on LAND. (green dot = ok)",
+      msg_point_ocean: "🔴 This is ocean/sea. Place the point on land (green dot).",
+      msg_intersection: "⛔ Intersects another realm — not allowed.",
+      msg_overlap_country: "⛔ A realm already exists here. You can't claim over a realm.",
+      msg_land_missing: "ℹ️ land.geojson not found → client can't know land (server still verifies).",
+      msg_point_too_close: "ℹ️ Point is too close to an existing one.",
+      msg_min_points: "⚠ At least 3 points must remain.",
+      msg_max_points: "⚠ Point limit reached: ${max}",
+      msg_expand_mode: "🟣 BORDER EXPANSION MODE:\n",
+      msg_create_mode: "🟣 Claiming a realm: click to place points. When ready — Finish → Save.",
+      msg_select_blueprint: "Select a blueprint first.",
+      msg_login_first: "Login first.",
+      msg_create_country_first: "Create your realm first.",
+      msg_cant_find_country: "Could not detect your realm. Reload / ensure it exists.",
+      msg_bad_geometry: "Bad realm geometry.",
+      msg_built_blueprint: "✅ Built ${name}!",
+      msg_collected: "✅ Collected: ${collected} EC",
+      msg_upgraded: "✅ Upgraded to Lv ${level}",
+      // UI labels used from JS (optional)
+      ui_build_mode_off: "Build mode: off",
+      ui_build_mode_on: "Build mode: ON",
+      ui_build_mode_hint: "Pick a blueprint — then click inside your realm to deploy.",
+      ui_login_to_see_factories: "Login to see your factories."
+    },
+    uk: {
+      km2: "км²",
+      msg_points_land: "🔴 Точки мають бути НА СУШІ. (зелена крапка = ок)",
+      msg_point_ocean: "🔴 Це море/океан. Став точку на суші (зелена крапка).",
+      msg_intersection: "⛔ Перетин з іншою країною — так не можна.",
+      msg_overlap_country: "⛔ Тут уже є країна. Не можна ставити країну на країну.",
+      msg_land_missing: "ℹ️ land.geojson не знайдено → клієнт не знає сушу (сервер все одно перевірить).",
+      msg_point_too_close: "ℹ️ Точка занадто близько до існуючої.",
+      msg_min_points: "⚠ Мінімум 3 точки мають залишитись.",
+      msg_max_points: "⚠ Досягнуто ліміт точок: ${max}",
+      msg_expand_mode: "🟣 РЕЖИМ РОЗШИРЕННЯ КОРДОНУ:\n",
+      msg_create_mode: "🟣 Створення країни: клікай щоб ставити точки. Коли готово — Finish → Save.",
+      msg_select_blueprint: "Спочатку вибери blueprint.",
+      msg_login_first: "Спочатку увійди.",
+      msg_create_country_first: "Спочатку створи країну.",
+      msg_cant_find_country: "Не можу знайти твою країну. Перезавантаж сторінку.",
+      msg_bad_geometry: "Погана геометрія країни.",
+      msg_built_blueprint: "✅ Побудовано: ${name}!",
+      msg_collected: "✅ Зібрано: ${collected} EC",
+      msg_upgraded: "✅ Підвищено до Lv ${level}",
+      // UI labels used from JS (optional)
+      ui_build_mode_off: "Режим будівництва: вимкнено",
+      ui_build_mode_on: "Режим будівництва: УВІМК",
+      ui_build_mode_hint: "Вибери blueprint — тоді клікни в межах своєї країни, щоб поставити фабрику.",
+      ui_login_to_see_factories: "Увійди, щоб бачити свої фабрики."
+    }
+  };
+
+  let LANG = (localStorage.getItem("ec_lang") || "").toLowerCase();
+  if (LANG !== "uk" && LANG !== "en") {
+    const nav = (navigator.language || "").toLowerCase();
+    LANG = nav.startsWith("uk") ? "uk" : "en";
+  }
+
+  function t(key, vars = {}) {
+    const dict = I18N[LANG] || I18N.en;
+    let s = dict[key] ?? I18N.en[key] ?? key;
+    s = s.replace(/\$\{(\w+)\}/g, (_, k) => (vars[k] !== undefined ? String(vars[k]) : ""));
+    return s;
+  }
+
+  function setLang(next) {
+    const v = String(next || "").toLowerCase();
+    if (v !== "uk" && v !== "en") return;
+    LANG = v;
+    localStorage.setItem("ec_lang", LANG);
+    try { document.documentElement.lang = LANG; } catch (_) {}
+
+    // refresh a few dynamic labels controlled by JS
+    if (fbSub) fbSub.textContent = (fbSub.dataset.mode === "on") ? t("ui_build_mode_on") : t("ui_build_mode_off");
+  }
+
+  document.querySelectorAll("[data-lang]").forEach((b) => {
+    b.addEventListener("click", () => setLang(b.getAttribute("data-lang")));
+  });
 
   // =========================================================
   // Stars background
@@ -128,7 +213,7 @@
 
   function formatKm2(v) {
     const n = Math.round(v);
-    return n.toLocaleString("en-US") + " км²";
+    return n.toLocaleString("en-US") + " " + t("km2");
   }
 
   function debounce(fn, ms) {
@@ -1092,8 +1177,8 @@
     }
 
     if (mode === "create_country" || mode === "expand_country") {
-      if (notOnLand) showFbMsg("🔴 Точки мають бути НА СУШІ. (зелена крапка = ок)");
-      else if (overlaps) showFbMsg("⛔ Перетин з іншою країною — так не можна.");
+      if (notOnLand) showFbMsg(t("msg_points_land"));
+      else if (overlaps) showFbMsg(t("msg_intersection"));
     }
   }
 
@@ -1117,7 +1202,7 @@
         if (map.getLayer("countries-selected")) map.setFilter("countries-selected", ["==", ["get", "id"], -1]);
 
         hideFbMsg();
-        if (!LAND_READY) showFbMsg("ℹ️ land.geojson не знайдено → клієнт не знає сушу (сервер все одно перевірить).");
+        if (!LAND_READY) showFbMsg(t("msg_land_missing"));
 
         updateDraftEconomyUI();
       } else {
@@ -1287,7 +1372,7 @@
     lng = snapped.lng; lat = snapped.lat;
 
     if (tooCloseToExistingPoint(lng, lat, 10)) {
-      showFbMsg("ℹ️ Точка занадто близько до існуючої.", 1200);
+      showFbMsg(t("msg_point_too_close"), 1200);
       return;
     }
 
@@ -1318,7 +1403,7 @@
   function deleteDraftPointAt(idx) {
     if (idx < 0) return;
     if (draftPoints.length <= 3) {
-      showFbMsg("⚠ Мінімум 3 точки мають залишитись.", 1600);
+      showFbMsg(t("msg_min_points"), 1600);
       return;
     }
     pushDraftHistory();
@@ -1694,7 +1779,7 @@
           const p = `${MY_COINS} EC`;
           if (myCoinsEl) myCoinsEl.textContent = `💰 ${p}`;
           if (topCoinsEl) topCoinsEl.textContent = `💰 ${p}`;
-          showFbMsg(`✅ Collected: ${res.collected || 0} EC`, 1800);
+          showFbMsg(t("msg_collected", { collected: (res.collected || 0) }), 1800);
           await refreshMyFactories();
         } catch (e) { showFbMsg(e.message); }
       });
@@ -1706,7 +1791,7 @@
           const p = `${MY_COINS} EC`;
           if (myCoinsEl) myCoinsEl.textContent = `💰 ${p}`;
           if (topCoinsEl) topCoinsEl.textContent = `💰 ${p}`;
-          showFbMsg(`✅ Upgraded to Lv ${res.level}`, 1800);
+          showFbMsg(t("msg_upgraded", { level: res.level }), 1800);
           await refreshMyFactories();
           await loadFactories();
         } catch (e) { showFbMsg(e.message); }
@@ -1724,12 +1809,12 @@
   }
 
   async function buildFactoryAt(lng, lat) {
-    if (!selectedBlueprint) return showFbMsg("Select a blueprint first.");
-    if (!ME.authenticated) return showFbMsg("Login first.");
-    if (!ME.has_country) return showFbMsg("Create your country first.");
+    if (!selectedBlueprint) return showFbMsg(t("msg_select_blueprint"));
+    if (!ME.authenticated) return showFbMsg(t("msg_login_first"));
+    if (!ME.has_country) return showFbMsg(t("msg_create_country_first"));
 
     const cid = myCountryIdFromCountriesFC();
-    if (!cid) return showFbMsg("Could not detect your country. Reload / ensure your country exists.");
+    if (!cid) return showFbMsg(t("msg_cant_find_country"));
 
     try {
       const payload = { country_id: cid, blueprint: selectedBlueprint.key, lng, lat };
@@ -1740,7 +1825,7 @@
       if (myCoinsEl) myCoinsEl.textContent = `💰 ${p}`;
       if (topCoinsEl) topCoinsEl.textContent = `💰 ${p}`;
 
-      showFbMsg(`✅ Built ${selectedBlueprint.name}!`, 2000);
+      showFbMsg(t("msg_built_blueprint", { name: selectedBlueprint.name }), 2000);
       await loadFactories();
       await refreshMyFactories();
     } catch (e) {
@@ -1950,19 +2035,19 @@
     if (mode === "create_country") {
       const feats = map.queryRenderedFeatures(e.point, { layers: ["countries-fill"] });
       if (feats && feats.length) {
-        showFbMsg("⛔ Тут уже є країна. Не можна ставити країну на країну.", 1700);
+        showFbMsg(t("msg_overlap_country"), 1700);
         return;
       }
     }
 
     const onLand = isPointOnLand(e.lngLat.lng, e.lngLat.lat);
     if (onLand === false) {
-      showFbMsg("🔴 Це море/океан. Став точку на суші (зелена крапка).", 1700);
+      showFbMsg(t("msg_point_ocean"), 1700);
       return;
     }
 
     if (draftPoints.length >= RULES.country_max_points) {
-      showFbMsg(`⚠ Досягнуто ліміт точок: ${RULES.country_max_points}`, 1500);
+      showFbMsg(t("msg_max_points", { max: RULES.country_max_points }), 1500);
       return;
     }
 
@@ -1971,7 +2056,7 @@
       insertDraftPointNearestSegment(e.lngLat.lng, e.lngLat.lat, { force });
     } else {
       if (tooCloseToExistingPoint(e.lngLat.lng, e.lngLat.lat, 10)) {
-        showFbMsg("ℹ️ Точка занадто близько до існуючої.", 1200);
+        showFbMsg(t("msg_point_too_close"), 1200);
         return;
       }
       pushDraftHistory();
@@ -1987,19 +2072,19 @@
     EXPAND_TARGET = { countryId: null, oldAreaKm2: 0, oldCost: 0 };
     clearDraft();
     setMode("create_country");
-    showFbMsg("🟣 Створення країни: клікай щоб ставити точки. Коли готово — Finish → Save.", 2200);
+    showFbMsg(t("msg_create_mode"), 2200);
   });
 
   // Expand = clone old polygon into draft + ghost old border
   if (btnExpandCountry) btnExpandCountry.addEventListener("click", async () => {
     hideFbMsg();
-    if (!ME.authenticated) return showFbMsg("Login first.");
-    if (!ME.has_country) return showFbMsg("Спочатку створи країну.", 2000);
+    if (!ME.authenticated) return showFbMsg(t("msg_login_first"));
+    if (!ME.has_country) return showFbMsg(t("msg_create_country_first"), 2000);
 
     const r = await fetch("/api/my/country", { credentials: "include" });
     const j = await r.json().catch(() => ({}));
     const feat = j?.data;
-    if (!j.ok || !feat) return showFbMsg("Не можу знайти твою країну. Перезавантаж сторінку.", 2000);
+    if (!j.ok || !feat) return showFbMsg(t("msg_cant_find_country"), 2000);
 
     const cid = Number(feat.properties?.id || feat.id || 0);
     const oldArea = Number(feat.properties?.area_km2 || 0);
@@ -2007,7 +2092,7 @@
     EXPAND_TARGET = { countryId: cid, oldAreaKm2: oldArea, oldCost };
 
     const ringClosed = feat.geometry?.coordinates?.[0];
-    if (!ringClosed || ringClosed.length < 4) return showFbMsg("Погана геометрія країни.", 1800);
+    if (!ringClosed || ringClosed.length < 4) return showFbMsg(t("msg_bad_geometry"), 1800);
 
     setExpandGhostFromRingClosed(ringClosed);
 
@@ -2017,8 +2102,7 @@
 
     setMode("expand_country");
 
-    showFbMsg(
-      "🟣 РЕЖИМ РОЗШИРЕННЯ КОРДОНУ:\n" +
+    showFbMsg(t("msg_expand_mode") +
       "• Наведи на лінію: підсвітиться сегмент\n" +
       "• Клік по лінії = додати точку НА ЛІНІЮ\n" +
       "• Тягни точки (drag)\n" +
@@ -2239,6 +2323,9 @@
     });
   }
 
+  // =========================================================
+  // Start
+  // =========================================================
   setFactoriesPanel(false);
   setMode("explore");
   document.getElementById("btnMarket")?.addEventListener("click", () => {
