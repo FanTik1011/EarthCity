@@ -2239,6 +2239,9 @@
     });
   }
 
+  // =========================================================
+  // Start
+  // =========================================================
   setFactoriesPanel(false);
   setMode("explore");
   document.getElementById("btnMarket")?.addEventListener("click", () => {
